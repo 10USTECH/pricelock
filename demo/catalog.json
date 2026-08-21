@@ -4,14 +4,14 @@
     {
       "name": "Lunch",
       "items": [
-        { "id": "MARGHERITALUNCH0000000001", "name": "Margherita", "price": 12.00 },
+        { "id": "HOUSESALADLUNCH0000000001", "name": "House Salad", "price": 12.00 },
         { "id": "GARDENSALAD00000000000001", "name": "Garden Salad", "price": 9.00 }
       ]
     },
     {
       "name": "Dinner",
       "items": [
-        { "id": "MARGHERITADINNER000000002", "name": "Margherita", "price": 16.00 },
+        { "id": "HOUSESALADDINNER000000002", "name": "House Salad", "price": 16.00 },
         { "id": "TIRAMISU00000000000000003", "name": "Tiramisu", "price": 7.50 }
       ]
     }

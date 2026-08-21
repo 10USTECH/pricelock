@@ -16,7 +16,7 @@
 //
 // KEYING — catalog item id, NEVER display name. This is the whole point.
 //   Two menu items can share a display name and cost different amounts (a lunch/dinner
-//   twin: "Margherita" is $12 at lunch and $16 at dinner — two distinct catalog objects).
+//   twin: "House Salad" is $12 at lunch and $16 at dinner — two distinct catalog objects).
 //   A name-keyed map is last-wins: it silently overwrites the correct price with the other
 //   twin's. So every price node is anchored to a stable catalog id:
 //       visible HTML  ->  data-sq-item="<id>"

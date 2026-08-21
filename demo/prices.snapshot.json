@@ -6,12 +6,12 @@
       "name": "Garden Salad",
       "price": 9
     },
-    "MARGHERITADINNER000000002": {
-      "name": "Margherita",
+    "HOUSESALADDINNER000000002": {
+      "name": "House Salad",
       "price": 16
     },
-    "MARGHERITALUNCH0000000001": {
-      "name": "Margherita",
+    "HOUSESALADLUNCH0000000001": {
+      "name": "House Salad",
       "price": 12
     },
     "TIRAMISU00000000000000003": {

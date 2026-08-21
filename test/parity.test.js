@@ -87,9 +87,9 @@ test('every snapshot id is used somewhere on the site', () => {
 });
 
 test('the two same-named twins keep distinct prices (the collision that name-keying breaks)', () => {
-  // Both "Margherita" objects must survive with their own price. A name-keyed map would
+  // Both "House Salad" objects must survive with their own price. A name-keyed map would
   // have collapsed them to one; id-keying keeps both.
-  const named = Object.entries(items).filter(([, v]) => v.name === 'Margherita').map(([id, v]) => ({ id, price: v.price }));
-  assert.equal(named.length, 2, 'expected two distinct Margherita ids in the snapshot');
+  const named = Object.entries(items).filter(([, v]) => v.name === 'House Salad').map(([id, v]) => ({ id, price: v.price }));
+  assert.equal(named.length, 2, 'expected two distinct House Salad ids in the snapshot');
   assert.notEqual(named[0].price, named[1].price, 'the twins must hold different prices');
 });
