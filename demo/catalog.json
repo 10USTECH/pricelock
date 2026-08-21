@@ -1,0 +1,19 @@
+{
+  "cachedAt": "2026-01-01T00:00:00Z",
+  "menu": [
+    {
+      "name": "Lunch",
+      "items": [
+        { "id": "MARGHERITALUNCH0000000001", "name": "Margherita", "price": 12.00 },
+        { "id": "GARDENSALAD00000000000001", "name": "Garden Salad", "price": 9.00 }
+      ]
+    },
+    {
+      "name": "Dinner",
+      "items": [
+        { "id": "MARGHERITADINNER000000002", "name": "Margherita", "price": 16.00 },
+        { "id": "TIRAMISU00000000000000003", "name": "Tiramisu", "price": 7.50 }
+      ]
+    }
+  ]
+}

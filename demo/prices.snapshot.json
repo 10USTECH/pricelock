@@ -1,0 +1,22 @@
+{
+  "source": "demo/catalog.json",
+  "cachedAt": "2026-01-01T00:00:00Z",
+  "items": {
+    "GARDENSALAD00000000000001": {
+      "name": "Garden Salad",
+      "price": 9
+    },
+    "MARGHERITADINNER000000002": {
+      "name": "Margherita",
+      "price": 16
+    },
+    "MARGHERITALUNCH0000000001": {
+      "name": "Margherita",
+      "price": 12
+    },
+    "TIRAMISU00000000000000003": {
+      "name": "Tiramisu",
+      "price": 7.5
+    }
+  }
+}

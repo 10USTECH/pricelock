@@ -1,0 +1,31 @@
+{
+  "name": "pricelock",
+  "version": "1.0.0",
+  "description": "Reference implementation: bake POS-accurate prices into a static site at authoring time, keyed by catalog item id, with a committed snapshot and an offline parity gate.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "bake-prices": "bin/bake-prices.mjs"
+  },
+  "scripts": {
+    "bake": "node bin/bake-prices.mjs --write",
+    "check": "node bin/bake-prices.mjs --check",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/10USTECH/pricelock.git"
+  },
+  "keywords": [
+    "static-site",
+    "jamstack",
+    "square",
+    "catalog",
+    "pricing",
+    "json-ld",
+    "build-time"
+  ]
+}

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo Eatery — Menu</title>
+<meta name="description" content="A demo static menu whose prices are baked from a point-of-sale catalog at authoring time and anchored by catalog item id.">
+<!--
+  Every price appears in TWO places that must agree: the visible node (data-sq-item)
+  and the JSON-LD MenuItem (identifier). Both are keyed by the catalog item id, so the
+  two "Margherita" rows — same display name, different prices — never collide.
+-->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Menu",
+  "name": "Demo Eatery",
+  "hasMenuSection": [
+    {
+      "@type": "MenuSection",
+      "name": "Lunch",
+      "hasMenuItem": [
+        {
+          "@type": "MenuItem",
+          "name": "Margherita",
+          "identifier": "MARGHERITALUNCH0000000001",
+          "offers": { "@type": "Offer", "price": "12.00", "priceCurrency": "USD" }
+        },
+        {
+          "@type": "MenuItem",
+          "name": "Garden Salad",
+          "identifier": "GARDENSALAD00000000000001",
+          "offers": { "@type": "Offer", "price": "9.00", "priceCurrency": "USD" }
+        }
+      ]
+    },
+    {
+      "@type": "MenuSection",
+      "name": "Dinner",
+      "hasMenuItem": [
+        {
+          "@type": "MenuItem",
+          "name": "Margherita",
+          "identifier": "MARGHERITADINNER000000002",
+          "offers": { "@type": "Offer", "price": "16.00", "priceCurrency": "USD" }
+        },
+        {
+          "@type": "MenuItem",
+          "name": "Tiramisu",
+          "identifier": "TIRAMISU00000000000000003",
+          "offers": { "@type": "Offer", "price": "7.50", "priceCurrency": "USD" }
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<main>
+  <h1>Demo Eatery</h1>
+
+  <section>
+    <h2 class="cat-title">Lunch</h2>
+    <article class="item"><h3 class="item-name">Margherita</h3><div class="item-price" data-sq-item="MARGHERITALUNCH0000000001">$12.00</div></article>
+    <article class="item"><h3 class="item-name">Garden Salad</h3><div class="item-price" data-sq-item="GARDENSALAD00000000000001">$9.00</div></article>
+  </section>
+
+  <section>
+    <h2 class="cat-title">Dinner</h2>
+    <article class="item"><h3 class="item-name">Margherita</h3><div class="item-price" data-sq-item="MARGHERITADINNER000000002">$16.00</div></article>
+    <article class="item"><h3 class="item-name">Tiramisu</h3><div class="item-price" data-sq-item="TIRAMISU00000000000000003">$7.50</div></article>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,18 @@
+name: parity-gate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Drift check: the committed tree must already match the catalog.
+      - run: node bin/bake-prices.mjs --check
+      # Offline trust anchor: visible == JSON-LD == snapshot, no network.
+      - run: node --test
