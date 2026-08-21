@@ -38,17 +38,17 @@ POS catalog ──(authoring time, once)──▶ bake-prices ──▶ committe
 
 This is the bug that bites everyone who builds this the quick way.
 
-Two menu items can share a **display name** and cost **different amounts** — a lunch/dinner twin. In the demo catalog, *Margherita* is **$12 at lunch** and **$16 at dinner**: two distinct catalog objects, two ids, one name.
+Two menu items can share a **display name** and cost **different amounts** — a lunch/dinner twin. In the demo catalog, *House Salad* is **$12 at lunch** and **$16 at dinner**: two distinct catalog objects, two ids, one name.
 
-Build a `{ name → price }` map and you get **last-wins**: whichever *Margherita* the loop sees last overwrites the other, and half your menu is silently mispriced. Nothing errors. The page looks fine. The number is just wrong.
+Build a `{ name → price }` map and you get **last-wins**: whichever *House Salad* the loop sees last overwrites the other, and half your menu is silently mispriced. Nothing errors. The page looks fine. The number is just wrong.
 
 So every price node is anchored to the stable catalog **id**, not its name:
 
 ```html
-<div class="item-price" data-sq-item="MARGHERITALUNCH0000000001">$12.00</div>
+<div class="item-price" data-sq-item="HOUSESALADLUNCH0000000001">$12.00</div>
 ```
 ```json
-{ "@type": "MenuItem", "name": "Margherita", "identifier": "MARGHERITALUNCH0000000001",
+{ "@type": "MenuItem", "name": "House Salad", "identifier": "HOUSESALADLUNCH0000000001",
   "offers": { "@type": "Offer", "price": "12.00", "priceCurrency": "USD" } }
 ```
 

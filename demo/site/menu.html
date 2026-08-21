@@ -8,7 +8,7 @@
 <!--
   Every price appears in TWO places that must agree: the visible node (data-sq-item)
   and the JSON-LD MenuItem (identifier). Both are keyed by the catalog item id, so the
-  two "Margherita" rows — same display name, different prices — never collide.
+  two "House Salad" rows — same display name, different prices — never collide.
 -->
 <script type="application/ld+json">
 {
@@ -22,8 +22,8 @@
       "hasMenuItem": [
         {
           "@type": "MenuItem",
-          "name": "Margherita",
-          "identifier": "MARGHERITALUNCH0000000001",
+          "name": "House Salad",
+          "identifier": "HOUSESALADLUNCH0000000001",
           "offers": { "@type": "Offer", "price": "12.00", "priceCurrency": "USD" }
         },
         {
@@ -40,8 +40,8 @@
       "hasMenuItem": [
         {
           "@type": "MenuItem",
-          "name": "Margherita",
-          "identifier": "MARGHERITADINNER000000002",
+          "name": "House Salad",
+          "identifier": "HOUSESALADDINNER000000002",
           "offers": { "@type": "Offer", "price": "16.00", "priceCurrency": "USD" }
         },
         {
@@ -62,13 +62,13 @@
 
   <section>
     <h2 class="cat-title">Lunch</h2>
-    <article class="item"><h3 class="item-name">Margherita</h3><div class="item-price" data-sq-item="MARGHERITALUNCH0000000001">$12.00</div></article>
+    <article class="item"><h3 class="item-name">House Salad</h3><div class="item-price" data-sq-item="HOUSESALADLUNCH0000000001">$12.00</div></article>
     <article class="item"><h3 class="item-name">Garden Salad</h3><div class="item-price" data-sq-item="GARDENSALAD00000000000001">$9.00</div></article>
   </section>
 
   <section>
     <h2 class="cat-title">Dinner</h2>
-    <article class="item"><h3 class="item-name">Margherita</h3><div class="item-price" data-sq-item="MARGHERITADINNER000000002">$16.00</div></article>
+    <article class="item"><h3 class="item-name">House Salad</h3><div class="item-price" data-sq-item="HOUSESALADDINNER000000002">$16.00</div></article>
     <article class="item"><h3 class="item-name">Tiramisu</h3><div class="item-price" data-sq-item="TIRAMISU00000000000000003">$7.50</div></article>
   </section>
 </main>
