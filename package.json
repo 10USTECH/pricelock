@@ -1,7 +1,7 @@
 {
   "name": "pricelock",
   "version": "1.0.0",
-  "description": "Reference implementation: bake POS-accurate prices into a static site at authoring time, keyed by catalog item id, with a committed snapshot and an offline parity gate.",
+  "description": "Reference implementation: write catalog prices into a static site's HTML, keyed by catalog item id, with a committed snapshot and an offline three-way consistency check.",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -22,7 +22,6 @@
   "keywords": [
     "static-site",
     "jamstack",
-    "square",
     "catalog",
     "pricing",
     "json-ld",

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-// bin/bake-prices.mjs — bake POS-accurate prices into a static site at authoring time.
+// bin/bake-prices.mjs — write catalog prices into a static site's HTML when you run it.
 //
 // WHAT THIS DOES
-//   Reads a point-of-sale catalog (the public Square Catalog API shape), then rewrites
-//   the price on every product node of a static site so the number a crawler sees is the
-//   number the register charges — with NO database and NO price fetch at request time.
-//   The prices are baked into the committed HTML; a snapshot JSON is written alongside as
-//   an offline trust anchor. See README.md for the full argument.
+//   Reads a catalog feed in a simplified menu-feed shape (a demo fixture — NOT the Square
+//   Catalog API; a real POS needs an adapter to this shape), then rewrites the price on
+//   every matched product node so the number a crawler sees is the number in the feed —
+//   with NO database and NO price fetch at request time. A snapshot JSON is written
+//   alongside for the offline consistency check. See README.md, incl. "Known limits".
 //
-// WHERE IT RUNS — authoring time, on your machine. NOT at deploy.
+// WHERE IT RUNS — when you run it, on your machine. NOT at deploy.
 //   Baking at deploy would make every deploy depend on the POS being reachable, and would
 //   diverge from whatever integrity gate seals your release. So: run this locally, commit
 //   the regenerated tree + snapshot, and let the offline parity gate (test/parity.test.js)
@@ -69,7 +69,7 @@ const money = n => n.toFixed(2);
 const die   = msg => { console.error('bake-prices FAIL: ' + msg); process.exit(1); };
 
 // ── catalog ──────────────────────────────────────────────────────────────────
-// Catalog shape (the public Square Catalog "get menu" response, trimmed):
+// Catalog shape (the demo fixture's simplified menu-feed format; not a vendor API):
 //   { cachedAt?: string, menu: [ { name: <section>, items: [ { id, name, price:Number } ] } ] }
 async function loadCatalog(src) {
   let raw;
@@ -204,7 +204,7 @@ for (const f of htmlFiles) {
   }
 }
 
-// snapshot: sorted { id: { name, price } } — the offline trust anchor
+// snapshot: sorted { id: { name, price } } — input to the offline consistency check
 const snap = {};
 for (const id of [...seen].sort()) { const r = cat.byId.get(id); snap[id] = { name: r.name, price: r.price }; }
 const snapText = JSON.stringify({ source: SRC === DEFAULT_SRC ? 'demo/catalog.json' : SRC, cachedAt: cat.cachedAt, items: snap }, null, 2) + '\n';
