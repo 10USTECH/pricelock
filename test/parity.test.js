@@ -1,9 +1,11 @@
-// test/parity.test.js — the offline trust anchor.
+// test/parity.test.js — the offline three-way consistency check.
 //
 // Proves, with NO catalog and NO network, that for every price on the site the three
 // surfaces agree: the visible node (data-sq-item), the JSON-LD MenuItem (identifier),
 // and the committed snapshot. Editing any one price without resealing the snapshot fails
-// this gate — which is what makes the baked prices tamper-evident.
+// this check. It is NOT a seal: whoever edits a price can reseal it (change the catalog
+// and run --write, or edit all three surfaces). Only `bake-prices --check` ties the site
+// back to the catalog feed. See README.md "Known limits".
 //
 // Run with: node --test   (from the repo root)
 
