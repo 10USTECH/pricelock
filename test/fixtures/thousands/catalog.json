@@ -1,0 +1,20 @@
+{
+  "cachedAt": "2026-01-01T00:00:00Z",
+  "menu": [
+    {
+      "name": "All",
+      "items": [
+        {
+          "id": "PLATTER00000000000000001",
+          "name": "Party Platter",
+          "price": 1250
+        },
+        {
+          "id": "TRAY00000000000000000001",
+          "name": "Catering Tray",
+          "price": 1100
+        }
+      ]
+    }
+  ]
+}
