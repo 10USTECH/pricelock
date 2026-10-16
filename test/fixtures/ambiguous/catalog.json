@@ -1,0 +1,30 @@
+{
+  "cachedAt": "2026-01-01T00:00:00Z",
+  "menu": [
+    {
+      "name": "Lunch",
+      "items": [
+        {
+          "id": "SOUPLUNCH000000000000001",
+          "name": "Soup",
+          "price": 5
+        },
+        {
+          "id": "PASTA0000000000000000001",
+          "name": "Pasta",
+          "price": 13
+        }
+      ]
+    },
+    {
+      "name": "Dinner",
+      "items": [
+        {
+          "id": "SOUPDINNER00000000000002",
+          "name": "Soup",
+          "price": 7
+        }
+      ]
+    }
+  ]
+}
