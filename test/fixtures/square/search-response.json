@@ -1,0 +1,66 @@
+{
+  "objects": [
+    { "type": "CATEGORY", "id": "CATLUNCH00000000000000001", "present_at_all_locations": true,
+      "category_data": { "name": "Lunch" } },
+    { "type": "CATEGORY", "id": "CATDINNER0000000000000002", "present_at_all_locations": true,
+      "category_data": { "name": "Dinner" } },
+    { "type": "CATEGORY", "id": "CATGONE000000000000000003", "is_deleted": true,
+      "category_data": { "name": "Retired" } },
+
+    { "type": "ITEM", "id": "ITEMHSLUNCH00000000000001", "present_at_all_locations": true,
+      "item_data": { "name": "House Salad", "categories": [{ "id": "CATLUNCH00000000000000001", "ordinal": 0 }],
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARHSLUNCH000000000000001", "present_at_all_locations": true,
+            "item_variation_data": { "item_id": "ITEMHSLUNCH00000000000001", "name": "Regular", "ordinal": 0,
+              "pricing_type": "FIXED_PRICING", "price_money": { "amount": 1200, "currency": "USD" },
+              "location_overrides": [ { "location_id": "LTRUCK0000000001", "price_money": { "amount": 1100, "currency": "USD" }, "pricing_type": "FIXED_PRICING" } ] } }
+        ] } },
+
+    { "type": "ITEM", "id": "ITEMHSDINNER0000000000002", "present_at_all_locations": true,
+      "item_data": { "name": "House Salad", "category_id": "CATDINNER0000000000000002",
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARHSDINNER00000000000002", "present_at_all_locations": true,
+            "item_variation_data": { "item_id": "ITEMHSDINNER0000000000002", "name": "", "ordinal": 0,
+              "pricing_type": "FIXED_PRICING", "price_money": { "amount": 1600, "currency": "USD" } } }
+        ] } },
+
+    { "type": "ITEM", "id": "ITEMBIRYANI00000000000003", "present_at_all_locations": true,
+      "item_data": { "name": "Chicken Biryani", "categories": [{ "id": "CATDINNER0000000000000002" }],
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARBIRYANIHALF000000000004", "present_at_all_locations": true,
+            "item_variation_data": { "name": "Half", "ordinal": 1, "pricing_type": "FIXED_PRICING", "price_money": { "amount": 999, "currency": "USD" } } },
+          { "type": "ITEM_VARIATION", "id": "VARBIRYANIFULL000000000005", "present_at_all_locations": true,
+            "item_variation_data": { "name": "Full", "ordinal": 0, "pricing_type": "FIXED_PRICING", "price_money": { "amount": 1699, "currency": "USD" } } },
+          { "type": "ITEM_VARIATION", "id": "VARBIRYANIOLD0000000000006", "is_deleted": true, "present_at_all_locations": true,
+            "item_variation_data": { "name": "Old", "ordinal": 2, "pricing_type": "FIXED_PRICING", "price_money": { "amount": 1, "currency": "USD" } } }
+        ] } },
+
+    { "type": "ITEM", "id": "ITEMMARKETFISH00000000007", "present_at_all_locations": true,
+      "item_data": { "name": "Market Fish", "categories": [{ "id": "CATDINNER0000000000000002" }],
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARMARKETFISH000000000008", "present_at_all_locations": true,
+            "item_variation_data": { "name": "Regular", "pricing_type": "VARIABLE_PRICING" } }
+        ] } },
+
+    { "type": "ITEM", "id": "ITEMTRUCKONLY000000000009", "present_at_all_locations": false, "present_at_location_ids": ["LTRUCK0000000001"],
+      "item_data": { "name": "Truck Special",
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARTRUCKONLY0000000000010", "present_at_all_locations": false, "present_at_location_ids": ["LTRUCK0000000001"],
+            "item_variation_data": { "name": "Regular", "pricing_type": "FIXED_PRICING", "price_money": { "amount": 800, "currency": "USD" } } }
+        ] } },
+
+    { "type": "ITEM", "id": "ITEMARCHIVED000000000011", "present_at_all_locations": true,
+      "item_data": { "name": "Archived Dish", "is_archived": true,
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARARCHIVED00000000000012", "present_at_all_locations": true,
+            "item_variation_data": { "name": "Regular", "pricing_type": "FIXED_PRICING", "price_money": { "amount": 500, "currency": "USD" } } }
+        ] } },
+
+    { "type": "ITEM", "id": "ITEMNOTHERE00000000000013", "present_at_all_locations": true, "absent_at_location_ids": ["LDEVON0000000001"],
+      "item_data": { "name": "Not At Devon",
+        "variations": [
+          { "type": "ITEM_VARIATION", "id": "VARNOTHERE000000000000014", "present_at_all_locations": true,
+            "item_variation_data": { "name": "Regular", "pricing_type": "FIXED_PRICING", "price_money": { "amount": 300, "currency": "USD" } } }
+        ] } }
+  ]
+}

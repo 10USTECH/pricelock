@@ -2,8 +2,8 @@
 // bin/bake-prices.mjs — write catalog prices into a static site's HTML when you run it.
 //
 // WHAT THIS DOES
-//   Reads a catalog feed in a simplified menu-feed shape (a demo fixture — NOT the Square
-//   Catalog API; a real POS needs an adapter to this shape), then rewrites the price on
+//   Reads a catalog feed in a simplified menu-feed shape (bin/square-to-feed.mjs produces it
+//   from a Square location; other POS systems need an adapter), then rewrites the price on
 //   every matched product node so the number a crawler sees is the number in the feed —
 //   with NO database and NO price fetch at request time. A snapshot JSON is written
 //   alongside for the offline consistency check. See README.md, incl. "Known limits".
@@ -56,9 +56,10 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
-  validateFeedId, validateFeedPrice, flagValue, UsageError, isUrlSource, checkSourceUrl, snapshotSource,
+  validateFeedId, validateFeedPrice, validateAmountMinor, validateCurrency, dollarsToCents,
+  flagValue, UsageError, isUrlSource, checkSourceUrl, snapshotSource,
   assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml,
-  parsePriceText, formatPrice,
+  centsToText, textToCents, formatPrice,
 } from '../lib/guards.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -91,7 +92,7 @@ try {
 // ── helpers ──────────────────────────────────────────────────────────────────
 const isId  = s => /^[A-Z0-9]{20,}$/.test(s);          // catalog id shape (opaque, uppercase)
 const nkey  = s => String(s).toLowerCase().trim().replace(/\s+/g, ' ');
-const money = n => n.toFixed(2);
+const money = centsToText;                              // integer cents -> "12.00"; the only formatter
 
 // ── catalog ──────────────────────────────────────────────────────────────────
 // Fetch over https only, through the connect-time address check, refusing redirects.
@@ -116,8 +117,12 @@ function fetchJson(u) {
   });
 }
 
-// Catalog shape (the demo fixture's simplified menu-feed format; not a vendor API):
-//   { cachedAt?: string, menu: [ { name: <section>, items: [ { id, name, price:Number } ] } ] }
+// Catalog shape (a simplified menu feed; not a vendor API). Two versions are read:
+//   v2 (schemaVersion: 2) { cachedAt?, locationId?, currency: "USD",
+//                           menu: [ { name: <section>, items: [ { id, name, amountMinor: Integer } ] } ] }
+//   v1 (no schemaVersion)  { cachedAt?, menu: [ { name, items: [ { id, name, price: Number } ] } ] }
+// Prices become integer cents at load; nothing downstream sees a float. An item without a
+// numeric amountMinor/price (variable-priced) is skipped in both versions.
 async function loadCatalog(src) {
   let raw, label;
   if (isUrlSource(src)) {
@@ -133,16 +138,26 @@ async function loadCatalog(src) {
     try { raw = JSON.parse(text); } catch (e) { die(`catalog is not valid JSON (${label}): ${e.message}`); }
   }
   if (!raw || !Array.isArray(raw.menu) || raw.menu.length === 0) die('catalog empty or malformed (no menu[])');
+  const v = raw.schemaVersion === undefined ? 1 : raw.schemaVersion;
+  if (v !== 1 && v !== 2) die(`catalog schemaVersion ${JSON.stringify(raw.schemaVersion)} is not supported (1 or 2)`);
+  let currency = 'USD';
+  if (v === 2) { try { currency = validateCurrency(raw.currency); } catch (e) { die(e.message); } }
+  const locationId = v === 2 && typeof raw.locationId === 'string' ? raw.locationId : null;
 
-  const byId = new Map();       // id -> { id, name, price, cat }
+  const byId = new Map();       // id -> { id, name, price (integer cents), cat }
   const byName = new Map();     // nkey(name) -> [ rec, ... ]
   const sections = new Map();   // lower(section) -> exact section name (for the section tie-break)
   for (const cat of raw.menu) {
     if (cat && cat.name) sections.set(nkey(cat.name), cat.name);
     for (const it of (cat.items || [])) {
-      if (typeof it.price !== 'number' || !it.id) continue;   // variable-priced / malformed -> skip
-      try { validateFeedId(it.id, it.name); validateFeedPrice(it.price, it.id); } catch (e) { die(e.message); }
-      const rec = { id: it.id, name: it.name, price: it.price, cat: cat.name };
+      const amountField = v === 2 ? it.amountMinor : it.price;
+      if (typeof amountField !== 'number' || !it.id) continue;   // variable-priced / malformed -> skip
+      let cents;
+      try {
+        validateFeedId(it.id, it.name);
+        cents = v === 2 ? validateAmountMinor(it.amountMinor, it.id) : dollarsToCents(validateFeedPrice(it.price, it.id));
+      } catch (e) { die(e.message); }
+      const rec = { id: it.id, name: it.name, price: cents, cat: cat.name };
       // One id, one price. The same id listed twice with identical name+price (an item
       // shown under two sections) is one record; the same id with a different price or
       // name is a feed defect — last-wins would bake one price into the HTML and write the
@@ -161,7 +176,7 @@ async function loadCatalog(src) {
       byName.get(k).push(rec);
     }
   }
-  return { byId, byName, sections, cachedAt: raw.cachedAt || null, label };
+  return { byId, byName, sections, cachedAt: raw.cachedAt || null, label, currency, locationId, schemaVersion: v };
 }
 
 // Resolve an UNANCHORED node to a catalog record. Throws on ambiguity (fail-closed).
@@ -170,7 +185,7 @@ function resolveUnanchored(cat, name, price, section) {
   const cands = cat.byName.get(nkey(name));
   if (!cands) return null;                                     // not in catalog -> leave alone
   if (cands.length === 1) return cands[0];
-  const byPrice = cands.filter(c => Math.abs(c.price - price) < 0.001);
+  const byPrice = cands.filter(c => c.price === price);      // integer cents: exact
   if (byPrice.length === 1) return byPrice[0];                 // tie-break 1: the price on the page today
   if (section) {
     const exact = cat.sections.get(nkey(section));
@@ -201,7 +216,7 @@ function tVisible(html, cat, seen) {
   let section = null;
   return html.replace(RE_VISIBLE, (m, h2, secName, _blk, h3, name, gap, attrs, price) => {
     if (h2) { section = secName.trim(); return m; }
-    const cur = parsePriceText(price);
+    const cur = textToCents(price);
     const anchors = attrs.match(/data-sq-item\b/g) || [];
     const exact = attrs.match(/data-sq-item="([^"]*)"/g) || [];
     // A node that carries data-sq-item in a form other than exactly data-sq-item="…" (single
@@ -230,7 +245,7 @@ function tVisible(html, cat, seen) {
 const RE_JSONLD = /("@type":\s*"MenuItem"\s*,\s*)((?:"@id":\s*"[^"]*"\s*,\s*)?)("name":\s*")([^"]+)(")((?:(?!"@type":\s*"MenuItem")[\s\S])*?)("price":\s*")([0-9]+\.[0-9]{2})(")/g;
 function tJsonLd(html, cat, seen) {
   return html.replace(RE_JSONLD, (m, head, atId, nOpen, name, nClose, mid, pOpen, price, pClose) => {
-    const cur = parseFloat(price);
+    const cur = textToCents(price);
     let id = (m.match(/"identifier":\s*"([^"]+)"/) || [])[1];
     let rec;
     if (id && isId(id)) { rec = { id, price: priceForId(cat, id, `JSON-LD "${name}"`) }; }
@@ -337,10 +352,12 @@ for (const f of htmlFiles) {
 if (STRICT && unread) die(`${unread} price-like node(s) the baker cannot read; nothing written. Anchor them, or pass --allow-unread to leave them as is.`);
 const changedFiles = pending.map(x => x.f);
 
-// snapshot: sorted { id: { name, price } } — input to the offline consistency check
+// snapshot (v2): sorted { id: { name, amountMinor } } — input to the offline consistency check
 const snap = {};
-for (const id of [...seen].sort()) { const r = cat.byId.get(id); snap[id] = { name: r.name, price: r.price }; }
-const snapText = JSON.stringify({ source: cat.label, cachedAt: cat.cachedAt, items: snap }, null, 2) + '\n';
+for (const id of [...seen].sort()) { const r = cat.byId.get(id); snap[id] = { name: r.name, amountMinor: r.price }; }
+const snapText = JSON.stringify({
+  schemaVersion: 2, source: cat.label, cachedAt: cat.cachedAt, locationId: cat.locationId, currency: cat.currency, items: snap,
+}, null, 2) + '\n';
 const snapBefore = fs.existsSync(SNAPSHOT) ? fs.readFileSync(SNAPSHOT, 'utf8') : '';
 const snapChanged = snapText !== snapBefore;
 

@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { visiblePrices, jsonLdPrices } from '../lib/extract.mjs';
+import { centsToText } from '../lib/guards.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.join(ROOT, 'demo', 'site');
@@ -25,11 +26,14 @@ const items = snapshot.items || {};
 // Every .html under the site, subfolders included (the baker reads the same set).
 const htmlFiles = fs.readdirSync(SITE, { recursive: true }).map(String).filter(f => f.endsWith('.html')).sort();
 
-// id -> "12.00"
-const snapPrice = id => (items[id] ? items[id].price.toFixed(2) : undefined);
+// id -> "12.00" (the snapshot stores integer cents; no float is formatted)
+const snapPrice = id => (items[id] ? centsToText(items[id].amountMinor) : undefined);
 
-test('snapshot is non-empty', () => {
+test('snapshot is non-empty, v2, and every amount is an integer', () => {
   assert.ok(Object.keys(items).length > 0, 'snapshot has no items — run: node bin/bake-prices.mjs --write');
+  assert.equal(snapshot.schemaVersion, 2, 'snapshot must be schemaVersion 2 — re-run --write');
+  assert.equal(snapshot.currency, 'USD');
+  for (const [id, v] of Object.entries(items)) assert.ok(Number.isInteger(v.amountMinor), `${id}: amountMinor must be an integer`);
 });
 
 test('every visible price matches the snapshot', () => {
@@ -78,7 +82,7 @@ test('every snapshot id has BOTH a visible node and a JSON-LD entry somewhere on
 test('the two same-named twins keep distinct prices (the collision that name-keying breaks)', () => {
   // Both "House Salad" objects must survive with their own price. A name-keyed map would
   // have collapsed them to one; id-keying keeps both.
-  const named = Object.entries(items).filter(([, v]) => v.name === 'House Salad').map(([id, v]) => ({ id, price: v.price }));
+  const named = Object.entries(items).filter(([, v]) => v.name === 'House Salad').map(([id, v]) => ({ id, price: v.amountMinor }));
   assert.equal(named.length, 2, 'expected two distinct House Salad ids in the snapshot');
   assert.notEqual(named[0].price, named[1].price, 'the twins must hold different prices');
 });
