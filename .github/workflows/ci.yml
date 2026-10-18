@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# The workflow only reads the tree. Nothing here needs to write to the repo, open issues,
+# or mint packages, so the token is read-only regardless of the org default.
+permissions:
+  contents: read
+
 jobs:
   parity:
     runs-on: ubuntu-latest
@@ -13,13 +18,19 @@ jobs:
         # 18.17.0 is the engines floor (fs.readdirSync recursive); keep it pinned, not 18.x.
         node-version: ['18.17.0', '20', '22']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Third-party actions are pinned to a commit SHA, not a floating tag: a tag can be
+      # moved to different code, a SHA cannot. The comment records which release it is.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
-      # Drift check: the committed tree must already match the catalog.
-      - run: node bin/bake-prices.mjs --check
-      # Offline trust anchor: visible == JSON-LD == snapshot, no network.
+      # Drift check: the committed tree must already match the catalog, and every
+      # price-like node on the site must be one the baker reads (--strict).
+      - run: node bin/bake-prices.mjs --check --strict
+      # Offline trust anchor: visible == JSON-LD == snapshot, no network; plus the
+      # baker, input-check and hardening regression suites.
       - run: node --test
       # No dependencies; package-lock.json exists so this can run at all.
       - run: npm audit --omit=dev

@@ -27,9 +27,12 @@
 //
 // FAIL-CLOSED
 //   Empty/malformed catalog, a feed id that is not a catalog id (it would be written into
-//   HTML), an anchored id missing from the catalog, or an unanchored node that resolves to
-//   more than one candidate -> throw, write nothing. Every file is baked in memory first and
-//   written only after the whole site has baked cleanly.
+//   HTML), a feed price toFixed(2) cannot render faithfully, one id with two prices, an
+//   anchored id missing from the catalog, an unanchored node that resolves to more than one
+//   candidate, an anchor attribute or JSON-LD shape the text transforms cannot handle
+//   safely, a symlink under --site -> exit 1, write nothing. Every file is baked in memory
+//   first and written only after the whole site has baked cleanly; each file is then
+//   replaced atomically (temp + fsync + rename). README "Writes and recovery" has the limits.
 //
 // INPUT CHECKS (lib/guards.mjs)
 //   --src as a URL must be https:, carry no credentials, and resolve only to public
@@ -41,6 +44,7 @@
 //   node bin/bake-prices.mjs --write                 # rewrite the site in place, emit the snapshot
 //   node bin/bake-prices.mjs --check --src <file|url># read the catalog from a file or https: URL
 //   node bin/bake-prices.mjs --write --site <dir> --snapshot <file>
+//   node bin/bake-prices.mjs --check --strict        # also exit 1 on price-like markup it cannot read
 //
 //   Defaults are the bundled demo, so a bare `--check` / `--write` runs credential-free with
 //   no arguments and no network. Point --src at your own catalog to use it for real.
@@ -52,8 +56,9 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
-  validateFeedId, flagValue, UsageError, isUrlSource, checkSourceUrl, snapshotSource,
-  assertPublicHost, guardedLookup, responseError, parsePriceText, formatPrice,
+  validateFeedId, validateFeedPrice, flagValue, UsageError, isUrlSource, checkSourceUrl, snapshotSource,
+  assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml,
+  parsePriceText, formatPrice,
 } from '../lib/guards.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -69,6 +74,7 @@ const args = process.argv.slice(2);
 const has = f => args.includes(f);
 const MODE_CHECK = has('--check');
 const MODE_WRITE = has('--write');
+const STRICT     = has('--strict');   // unread price-like markup is an error, not a warning
 if (MODE_CHECK === MODE_WRITE) usage('pass exactly one of --check (no write) or --write. See the header.');
 let SRC, SITE, SNAPSHOT;
 try {
@@ -87,21 +93,24 @@ const money = n => n.toFixed(2);
 
 // ── catalog ──────────────────────────────────────────────────────────────────
 // Fetch over https only, through the connect-time address check, refusing redirects.
+// Two clocks: a 15 s idle timeout on the socket, and a 30 s hard deadline for the whole
+// exchange (an idle timeout alone lets a server that drips one byte at a time run forever).
+// The body is read through readBodyBounded, so it can never be buffered without limit.
+const FETCH_IDLE_MS = 15000, FETCH_DEADLINE_MS = 30000;
 function fetchJson(u) {
   return new Promise((resolve, reject) => {
     const req = https.get(u, { lookup: guardedLookup(), agent: false, headers: { accept: 'application/json' } }, res => {
       const err = responseError(res.statusCode, res.headers.location);
       if (err) { res.resume(); return reject(err); }
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      readBodyBounded(res).then(text => {
+        try { resolve(JSON.parse(text)); }
         catch (e) { reject(new Error(`catalog is not valid JSON: ${e.message}`)); }
-      });
-      res.on('error', reject);
+      }, reject);
     });
-    req.setTimeout(15000, () => req.destroy(new Error('timed out after 15 s')));
+    const deadline = setTimeout(() => req.destroy(new Error(`exceeded the ${FETCH_DEADLINE_MS / 1000} s deadline`)), FETCH_DEADLINE_MS);
+    req.setTimeout(FETCH_IDLE_MS, () => req.destroy(new Error(`idle for ${FETCH_IDLE_MS / 1000} s`)));
     req.on('error', reject);
+    req.on('close', () => clearTimeout(deadline));
   });
 }
 
@@ -117,7 +126,9 @@ async function loadCatalog(src) {
     try { raw = await fetchJson(u); } catch (e) { die(`catalog fetch failed (${label}): ${e.message}`); }
   } else {
     label = src === DEFAULT_SRC ? 'demo/catalog.json' : src;
-    raw = JSON.parse(fs.readFileSync(src, 'utf8'));
+    let text;
+    try { text = fs.readFileSync(src, 'utf8'); } catch (e) { die(`cannot read --src ${src}: ${e.message}`); }
+    try { raw = JSON.parse(text); } catch (e) { die(`catalog is not valid JSON (${label}): ${e.message}`); }
   }
   if (!raw || !Array.isArray(raw.menu) || raw.menu.length === 0) die('catalog empty or malformed (no menu[])');
 
@@ -128,8 +139,20 @@ async function loadCatalog(src) {
     if (cat && cat.name) sections.set(nkey(cat.name), cat.name);
     for (const it of (cat.items || [])) {
       if (typeof it.price !== 'number' || !it.id) continue;   // variable-priced / malformed -> skip
-      try { validateFeedId(it.id, it.name); } catch (e) { die(e.message); }   // it would be written into HTML
+      try { validateFeedId(it.id, it.name); validateFeedPrice(it.price, it.id); } catch (e) { die(e.message); }
       const rec = { id: it.id, name: it.name, price: it.price, cat: cat.name };
+      // One id, one price. The same id listed twice with identical name+price (an item
+      // shown under two sections) is one record; the same id with a different price or
+      // name is a feed defect — last-wins would bake one price into the HTML and write the
+      // other into the snapshot, so refuse it.
+      const prev = byId.get(it.id);
+      if (prev) {
+        if (prev.price !== rec.price || nkey(prev.name) !== nkey(rec.name)) {
+          die(`feed id ${it.id} appears more than once with different data: `
+            + `"${prev.name}" $${money(prev.price)} (${prev.cat}) vs "${rec.name}" $${money(rec.price)} (${rec.cat})`);
+        }
+        continue;
+      }
       byId.set(it.id, rec);
       const k = nkey(it.name);
       if (!byName.has(k)) byName.set(k, []);
@@ -177,6 +200,14 @@ function tVisible(html, cat, seen) {
   return html.replace(RE_VISIBLE, (m, h2, secName, _blk, h3, name, gap, attrs, price) => {
     if (h2) { section = secName.trim(); return m; }
     const cur = parsePriceText(price);
+    const anchors = attrs.match(/data-sq-item\b/g) || [];
+    const exact = attrs.match(/data-sq-item="([^"]*)"/g) || [];
+    // A node that carries data-sq-item in a form other than exactly data-sq-item="…" (single
+    // quotes, unquoted, or twice) would end up with two anchors, and the browser keeps the
+    // FIRST — not the one this run wrote. Refuse rather than emit it.
+    if (anchors.length !== exact.length || anchors.length > 1) {
+      die(`visible "${name}": data-sq-item must appear exactly once as data-sq-item="…" (got: ${attrs.trim()})`);
+    }
     let id = (attrs.match(/data-sq-item="([^"]+)"/) || [])[1];
     let rec;
     if (id && isId(id)) { rec = { id, price: priceForId(cat, id, `visible "${name}"`) }; }
@@ -221,6 +252,49 @@ function tJsonLd(html, cat, seen) {
   });
 }
 
+// JSON-LD structure the regex transform above relies on. RE_JSONLD rewrites a MenuItem by
+// text, so three shapes it cannot handle safely are refused before anything is written:
+//   1. a MenuItem whose "identifier" comes AFTER its offers.price — the transform would not
+//      see it and would insert a second "identifier" key (a duplicate key; parsers keep the
+//      last one, i.e. the stale one);
+//   2. MenuItem text that is not inside a <script type="application/ld+json"> block (an
+//      HTML comment, a <pre> code sample) — it is not structured data and must not be baked;
+//   3. an ld+json block that contains MenuItem text but is not valid JSON — the regex would
+//      still rewrite inside it, and nothing would parse the result.
+const RE_LDJSON_BLOCK = /<script\b[^>]*\btype\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script\s*>/gi;
+const RE_MENUITEM = /"@type":\s*"MenuItem"/g;
+function checkJsonLdStructure(html, f) {
+  const blocks = [];
+  let b;
+  while ((b = RE_LDJSON_BLOCK.exec(html))) blocks.push({ start: b.index, end: b.index + b[0].length, text: b[1] });
+  let m;
+  while ((m = RE_MENUITEM.exec(html))) {
+    const line = html.slice(0, m.index).split('\n').length;
+    if (!blocks.some(k => m.index >= k.start && m.index < k.end)) {
+      die(`${f}:${line}: MenuItem markup outside a <script type="application/ld+json"> block — not structured data; refusing to bake it`);
+    }
+  }
+  for (const k of blocks) {
+    if (!/"@type":\s*"MenuItem"/.test(k.text)) continue;
+    let doc;
+    try { doc = JSON.parse(k.text); }
+    catch (e) { die(`${f}: a JSON-LD block containing MenuItem is not valid JSON (${e.message})`); }
+    const walk = node => {
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (!node || typeof node !== 'object') return;
+      if (node['@type'] === 'MenuItem') {
+        const keys = Object.keys(node);
+        const iId = keys.indexOf('identifier'), iOff = keys.indexOf('offers');
+        if (iId > -1 && iOff > -1 && iId > iOff) {
+          die(`${f}: MenuItem "${node.name}" lists "identifier" after "offers" — the baker reads "identifier" before the price; move it above "offers"`);
+        }
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(doc);
+  }
+}
+
 // Price-like markup the transforms above did not read: a "$<digit>" outside a visible price
 // node, or a "price": key outside a JSON-LD MenuItem. Reported as file:line; never fails.
 function unreadPrices(html) {
@@ -234,34 +308,31 @@ function unreadPrices(html) {
   return [...new Set(hits)].sort((a, b) => a - b);
 }
 
-function listHtml(dir) {
-  return fs.readdirSync(dir, { recursive: true })
-    .map(f => String(f))
-    .filter(f => f.endsWith('.html') && fs.statSync(path.join(dir, f)).isFile())
-    .map(f => f.split(path.sep).join('/'))
-    .sort();
-}
-
 // ── main ─────────────────────────────────────────────────────────────────────
 const cat = await loadCatalog(SRC);
 const seen = new Set();
 
-const htmlFiles = listHtml(SITE);
+let htmlFiles;
+try { htmlFiles = listHtml(SITE); } catch (e) { die(`--site ${SITE}: ${e.message}`); }
 if (htmlFiles.length === 0) die(`no .html files found in site dir: ${SITE}`);
 
 // Bake every file in memory first; a die() part-way leaves every file untouched.
 const pending = [];
+let unread = 0;
 for (const f of htmlFiles) {
   const p = path.join(SITE, f);
   const before = fs.readFileSync(p, 'utf8');
+  checkJsonLdStructure(before, f);
   let after = before;
   after = tVisible(after, cat, seen);
   after = tJsonLd(after, cat, seen);
   for (const line of unreadPrices(after)) {
-    console.error(`bake-prices WARN: ${f}:${line}: price-like markup the baker cannot read — left as is`);
+    unread++;
+    console.error(`bake-prices ${STRICT ? 'FAIL' : 'WARN'}: ${f}:${line}: price-like markup the baker cannot read — ${STRICT ? 'refused (--strict)' : 'left as is'}`);
   }
   if (after !== before) pending.push({ f, p, after });
 }
+if (STRICT && unread) die(`${unread} price-like node(s) the baker cannot read; nothing written. Anchor them or drop --strict.`);
 const changedFiles = pending.map(x => x.f);
 
 // snapshot: sorted { id: { name, price } } — input to the offline consistency check
@@ -272,8 +343,12 @@ const snapBefore = fs.existsSync(SNAPSHOT) ? fs.readFileSync(SNAPSHOT, 'utf8') :
 const snapChanged = snapText !== snapBefore;
 
 if (MODE_WRITE) {
-  for (const { p, after } of pending) fs.writeFileSync(p, after, { encoding: 'utf8' });   // repo is LF; Node writes \n as-is
-  if (snapChanged) fs.writeFileSync(SNAPSHOT, snapText, { encoding: 'utf8' });
+  // Each file is replaced atomically (temp + fsync + rename). The set of files is NOT
+  // atomic as a whole: the committed tree is the unit of rollback (git checkout -- <site>).
+  try {
+    for (const { p, after } of pending) writeFileAtomic(p, after);   // repo is LF; Node writes \n as-is
+    if (snapChanged) writeFileAtomic(SNAPSHOT, snapText);
+  } catch (e) { die(`write failed: ${e.message} — restore with git checkout, fix the cause, re-run --write`); }
 }
 
 console.log(`bake-prices: source=${cat.label}`);

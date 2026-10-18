@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { visiblePrices, jsonLdPrices } from '../lib/extract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.join(ROOT, 'demo', 'site');
@@ -26,25 +27,6 @@ const htmlFiles = fs.readdirSync(SITE, { recursive: true }).map(String).filter(f
 
 // id -> "12.00"
 const snapPrice = id => (items[id] ? items[id].price.toFixed(2) : undefined);
-
-// Pull every visible price node: data-sq-item="<id>" ...>$<price>. A grouped price ($1,000.00)
-// is read without its separators, so it compares equal to the snapshot's 1000.00.
-function visiblePrices(html) {
-  const re = /data-sq-item="([A-Z0-9]{20,})"[^>]*>\s*\$([0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}|[0-9]+\.[0-9]{2})/g;
-  const out = [];
-  let m;
-  while ((m = re.exec(html))) out.push({ id: m[1], price: m[2].replace(/,/g, '') });
-  return out;
-}
-
-// Pull every JSON-LD MenuItem price, bounded per item, keyed by its identifier.
-function jsonLdPrices(html) {
-  const re = /"@type":\s*"MenuItem"\s*,[\s\S]*?"identifier":\s*"([A-Z0-9]{20,})"[\s\S]*?"price":\s*"([0-9]+\.[0-9]{2})"/g;
-  const out = [];
-  let m;
-  while ((m = re.exec(html))) out.push({ id: m[1], price: m[2] });
-  return out;
-}
 
 test('snapshot is non-empty', () => {
   assert.ok(Object.keys(items).length > 0, 'snapshot has no items — run: node bin/bake-prices.mjs --write');
