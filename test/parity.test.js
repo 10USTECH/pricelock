@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { visiblePrices, jsonLdPrices } from '../lib/extract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.join(ROOT, 'demo', 'site');
@@ -26,25 +27,6 @@ const htmlFiles = fs.readdirSync(SITE, { recursive: true }).map(String).filter(f
 
 // id -> "12.00"
 const snapPrice = id => (items[id] ? items[id].price.toFixed(2) : undefined);
-
-// Pull every visible price node: data-sq-item="<id>" ...>$<price>. A grouped price ($1,000.00)
-// is read without its separators, so it compares equal to the snapshot's 1000.00.
-function visiblePrices(html) {
-  const re = /data-sq-item="([A-Z0-9]{20,})"[^>]*>\s*\$([0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}|[0-9]+\.[0-9]{2})/g;
-  const out = [];
-  let m;
-  while ((m = re.exec(html))) out.push({ id: m[1], price: m[2].replace(/,/g, '') });
-  return out;
-}
-
-// Pull every JSON-LD MenuItem price, bounded per item, keyed by its identifier.
-function jsonLdPrices(html) {
-  const re = /"@type":\s*"MenuItem"\s*,[\s\S]*?"identifier":\s*"([A-Z0-9]{20,})"[\s\S]*?"price":\s*"([0-9]+\.[0-9]{2})"/g;
-  const out = [];
-  let m;
-  while ((m = re.exec(html))) out.push({ id: m[1], price: m[2] });
-  return out;
-}
 
 test('snapshot is non-empty', () => {
   assert.ok(Object.keys(items).length > 0, 'snapshot has no items — run: node bin/bake-prices.mjs --write');
@@ -78,15 +60,18 @@ test('every JSON-LD price matches the snapshot', () => {
   assert.ok(checked > 0, 'no JSON-LD MenuItem prices found');
 });
 
-test('every snapshot id is used somewhere on the site', () => {
-  const usedIds = new Set();
+test('every snapshot id has BOTH a visible node and a JSON-LD entry somewhere on the site', () => {
+  // A price that exists on only one surface cannot be cross-checked, so an id that is
+  // visible but absent from JSON-LD (or the reverse) is a gap in the check, not a pass.
+  const seenVisible = new Set(), seenLd = new Set();
   for (const f of htmlFiles) {
     const html = fs.readFileSync(path.join(SITE, f), 'utf8');
-    for (const { id } of visiblePrices(html)) usedIds.add(id);
-    for (const { id } of jsonLdPrices(html)) usedIds.add(id);
+    for (const { id } of visiblePrices(html)) seenVisible.add(id);
+    for (const { id } of jsonLdPrices(html)) seenLd.add(id);
   }
   for (const id of Object.keys(items)) {
-    assert.ok(usedIds.has(id), `snapshot id ${id} (${items[id].name}) appears on no page — stale snapshot entry`);
+    assert.ok(seenVisible.has(id), `snapshot id ${id} (${items[id].name}) has no visible price node on any page`);
+    assert.ok(seenLd.has(id), `snapshot id ${id} (${items[id].name}) has no JSON-LD MenuItem on any page`);
   }
 });
 

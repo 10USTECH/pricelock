@@ -20,7 +20,7 @@ function tmpSite(name) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pricelock-${name}-`));
   fs.cpSync(path.join(FIX, name, 'site'), path.join(dir, 'site'), { recursive: true });
   const t = { site: path.join(dir, 'site'), snapshot: path.join(dir, 'snap.json'), catalog: path.join(FIX, name, 'catalog.json') };
-  t.run = mode => spawnSync(process.execPath, [BIN, mode, '--src', t.catalog, '--site', t.site, '--snapshot', t.snapshot],
+  t.run = (mode, ...flags) => spawnSync(process.execPath, [BIN, mode, ...flags, '--src', t.catalog, '--site', t.site, '--snapshot', t.snapshot],
     { encoding: 'utf8', timeout: 30000 });
   t.read = f => fs.readFileSync(path.join(t.site, f), 'utf8');
   return t;
@@ -87,14 +87,19 @@ test('subfolders: pages below --site are baked', () => {
   assert.match(t.read(path.join('menus', 'dinner.html')), /\$13\.00/);
 });
 
-test('unreadable price-like markup is a warning with file:line, not a failure', () => {
+test('unreadable price-like markup fails by default with file:line; --allow-unread downgrades it to a warning', () => {
   const t = tmpSite('warn');
-  const lines = t.read('menu.html').split('\n');
+  const before = t.read('menu.html');
+  const lines = before.split('\n');
   const want = lines.findIndex(l => l.includes('Specials from $5.00')) + 1;
-  const r = t.run('--check');
+  let r = t.run('--write');
+  assert.equal(r.status, 1, 'default is fail-closed');
+  assert.ok(r.stderr.includes(`bake-prices FAIL: menu.html:${want}:`), `expected a failure at menu.html:${want}\n${r.stderr}`);
+  assert.equal(t.read('menu.html'), before, 'nothing written');
+  r = t.run('--check', '--allow-unread');
   assert.equal(r.status, 1, 'no snapshot yet, so --check still reports drift');
   assert.ok(r.stderr.includes(`bake-prices WARN: menu.html:${want}:`), `expected a warning at menu.html:${want}\n${r.stderr}`);
-  const w = t.run('--write');
+  const w = t.run('--write', '--allow-unread');
   assert.equal(w.status, 0, w.stderr);
   assert.match(w.stderr, /WARN/);
   assert.match(t.read('menu.html'), /Specials from \$5\.00/, 'the unread markup is left as is');
