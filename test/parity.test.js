@@ -60,15 +60,18 @@ test('every JSON-LD price matches the snapshot', () => {
   assert.ok(checked > 0, 'no JSON-LD MenuItem prices found');
 });
 
-test('every snapshot id is used somewhere on the site', () => {
-  const usedIds = new Set();
+test('every snapshot id has BOTH a visible node and a JSON-LD entry somewhere on the site', () => {
+  // A price that exists on only one surface cannot be cross-checked, so an id that is
+  // visible but absent from JSON-LD (or the reverse) is a gap in the check, not a pass.
+  const seenVisible = new Set(), seenLd = new Set();
   for (const f of htmlFiles) {
     const html = fs.readFileSync(path.join(SITE, f), 'utf8');
-    for (const { id } of visiblePrices(html)) usedIds.add(id);
-    for (const { id } of jsonLdPrices(html)) usedIds.add(id);
+    for (const { id } of visiblePrices(html)) seenVisible.add(id);
+    for (const { id } of jsonLdPrices(html)) seenLd.add(id);
   }
   for (const id of Object.keys(items)) {
-    assert.ok(usedIds.has(id), `snapshot id ${id} (${items[id].name}) appears on no page — stale snapshot entry`);
+    assert.ok(seenVisible.has(id), `snapshot id ${id} (${items[id].name}) has no visible price node on any page`);
+    assert.ok(seenLd.has(id), `snapshot id ${id} (${items[id].name}) has no JSON-LD MenuItem on any page`);
   }
 });
 

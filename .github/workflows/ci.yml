@@ -27,8 +27,9 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       # Drift check: the committed tree must already match the catalog, and every
-      # price-like node on the site must be one the baker reads (--strict).
-      - run: node bin/bake-prices.mjs --check --strict
+      # price-like node on the site must be one the baker reads (the default; there is no
+      # --allow-unread here on purpose).
+      - run: node bin/bake-prices.mjs --check
       # Offline trust anchor: visible == JSON-LD == snapshot, no network; plus the
       # baker, input-check and hardening regression suites.
       - run: node --test

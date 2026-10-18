@@ -139,30 +139,30 @@ test('F4: two data-sq-item attributes on one node are refused', () => {
   assert.match(r.stderr, /data-sq-item must appear exactly once/);
 });
 
-// ── F5. --strict: unread price-like markup is an error ───────────────────────
-test('F5: without --strict, an unanchored <span>$12.00</span> whose id lives in JSON-LD passes --check with only a WARN (documented)', () => {
+// ── F5. unread price-like markup is an error by default (--allow-unread opts out) ───────────────────────
+test('F5: with --allow-unread, an unanchored <span>$12.00</span> whose id lives in JSON-LD passes --check with only a WARN (the pre-audit default, now opt-in)', () => {
   const page = `<span class="price">$12.00</span>\n` + LD(`{"@type":"MenuItem","name":"Pasta","identifier":"${ID}","offers":{"@type":"Offer","price":"13.00"}}`);
-  const t = scratch('strict-off', { 'menu.html': page }, catalog([{ id: ID, name: 'Pasta', price: 13 }]));
-  assert.equal(t.run('--write').status, 0);
-  const r = t.run('--check');
+  const t = scratch('allow-unread', { 'menu.html': page }, catalog([{ id: ID, name: 'Pasta', price: 13 }]));
+  assert.equal(t.run('--write', '--allow-unread').status, 0);
+  const r = t.run('--check', '--allow-unread');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /WARN: menu\.html:1/);
 });
 
-test('F5: with --strict the same page fails --check and --write writes nothing', () => {
+test('F5: by default the same page fails --check and --write writes nothing', () => {
   const page = `<span class="price">$12.00</span>\n` + LD(`{"@type":"MenuItem","name":"Pasta","identifier":"${ID}","offers":{"@type":"Offer","price":"12.00"}}`);
-  const t = scratch('strict-on', { 'menu.html': page }, catalog([{ id: ID, name: 'Pasta', price: 13 }]));
-  let r = t.run('--check', '--strict');
+  const t = scratch('strict-default', { 'menu.html': page }, catalog([{ id: ID, name: 'Pasta', price: 13 }]));
+  let r = t.run('--check');
   assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, /FAIL: menu\.html:1: .*refused \(--strict\)/);
-  r = t.run('--write', '--strict');
+  assert.match(r.stderr, /FAIL: menu\.html:1: .*refused/);
+  r = t.run('--write');
   assert.equal(r.status, 1, r.stderr);
-  assert.equal(t.read('menu.html'), page, 'nothing written under --strict');
+  assert.equal(t.read('menu.html'), page, 'nothing written');
   assert.equal(fs.existsSync(t.snapshot), false);
 });
 
-test('F5: --strict on the bundled demo passes (CI runs it)', () => {
-  const r = spawnSync(process.execPath, [BIN, '--check', '--strict'], { encoding: 'utf8', timeout: 30000 });
+test('F5: the bundled demo passes the default (strict) check', () => {
+  const r = spawnSync(process.execPath, [BIN, '--check'], { encoding: 'utf8', timeout: 30000 });
   assert.equal(r.status, 0, r.stderr);
 });
 

@@ -44,7 +44,7 @@
 //   node bin/bake-prices.mjs --write                 # rewrite the site in place, emit the snapshot
 //   node bin/bake-prices.mjs --check --src <file|url># read the catalog from a file or https: URL
 //   node bin/bake-prices.mjs --write --site <dir> --snapshot <file>
-//   node bin/bake-prices.mjs --check --strict        # also exit 1 on price-like markup it cannot read
+//   node bin/bake-prices.mjs --check --allow-unread  # downgrade unread price-like markup to a WARN
 //
 //   Defaults are the bundled demo, so a bare `--check` / `--write` runs credential-free with
 //   no arguments and no network. Point --src at your own catalog to use it for real.
@@ -74,7 +74,9 @@ const args = process.argv.slice(2);
 const has = f => args.includes(f);
 const MODE_CHECK = has('--check');
 const MODE_WRITE = has('--write');
-const STRICT     = has('--strict');   // unread price-like markup is an error, not a warning
+// Unread price-like markup is an error unless --allow-unread downgrades it to a warning.
+// (--strict is accepted for compatibility; it is the default.)
+const STRICT     = !has('--allow-unread');
 if (MODE_CHECK === MODE_WRITE) usage('pass exactly one of --check (no write) or --write. See the header.');
 let SRC, SITE, SNAPSHOT;
 try {
@@ -328,11 +330,11 @@ for (const f of htmlFiles) {
   after = tJsonLd(after, cat, seen);
   for (const line of unreadPrices(after)) {
     unread++;
-    console.error(`bake-prices ${STRICT ? 'FAIL' : 'WARN'}: ${f}:${line}: price-like markup the baker cannot read — ${STRICT ? 'refused (--strict)' : 'left as is'}`);
+    console.error(`bake-prices ${STRICT ? 'FAIL' : 'WARN'}: ${f}:${line}: price-like markup the baker cannot read — ${STRICT ? 'refused' : 'left as is (--allow-unread)'}`);
   }
   if (after !== before) pending.push({ f, p, after });
 }
-if (STRICT && unread) die(`${unread} price-like node(s) the baker cannot read; nothing written. Anchor them or drop --strict.`);
+if (STRICT && unread) die(`${unread} price-like node(s) the baker cannot read; nothing written. Anchor them, or pass --allow-unread to leave them as is.`);
 const changedFiles = pending.map(x => x.f);
 
 // snapshot: sorted { id: { name, price } } — input to the offline consistency check

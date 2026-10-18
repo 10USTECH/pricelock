@@ -7,9 +7,8 @@ This is a reference implementation — *show-your-work*, not a product. It is th
 It runs on bundled demo data, with no credentials:
 
 ```bash
-node bin/bake-prices.mjs --check            # would baking from demo/catalog.json change the committed site?
-node bin/bake-prices.mjs --check --strict   # the same, and fail on any price-like markup the baker cannot read
-node --test                                 # offline check: visible == JSON-LD == snapshot
+node bin/bake-prices.mjs --check   # would baking from demo/catalog.json change the committed site?
+node --test                        # offline check: visible == JSON-LD == snapshot
 ```
 
 No install step, no dependencies, no tokens, no database.
@@ -67,7 +66,7 @@ Hand-edit one price in one place and the check fails. That catches a half-made e
 
 **It does not prove the prices are right, and it is not tamper-proof.** Whoever edits a price can reseal it: change the catalog file and run `--write`, or hand-edit the same price in all three places, and the check passes on the new number. What ties prices back to their source is `bake-prices --check` against the catalog feed, and that needs the feed. In this repo the feed is the committed demo file, so CI shows the site matches *that file*, not any live POS.
 
-`.github/workflows/ci.yml` runs the drift check (`--check --strict`) and the consistency check on every push.
+`.github/workflows/ci.yml` runs the drift check and the consistency check on every push.
 
 ---
 
@@ -81,14 +80,14 @@ Every check below stops the run before a single file is written (exit 1, named c
 - **Anchor attributes** must appear exactly once per node as `data-sq-item="…"` (double quotes). A single-quoted or duplicated anchor would leave two attributes on the node, and the browser keeps the first.
 - **JSON-LD shape.** A `MenuItem` must carry `"identifier"` *before* `"offers"` (the text transform reads it there; after `offers` it would be re-inserted as a duplicate key). `MenuItem` text is only baked inside a `<script type="application/ld+json">` block — in a comment or a `<pre>` sample it is refused. An ld+json block that mentions `MenuItem` must parse as JSON.
 - **Symbolic links** under `--site` are refused, not followed (a write through a link would replace whatever it points at).
-- **With `--strict`**, any `$<digit>` or `"price":` the baker could not read is an error instead of a `WARN`. CI runs `--check --strict`.
+- **Price-like markup it cannot read** — any `$<digit>` or `"price":` outside a node it matched — is an error with file and line. `--allow-unread` downgrades it to a `WARN` and leaves the markup as is; CI does not pass that flag.
 
 ## Known limits
 
 - **Catalog shape.** Only the simplified feed shape below is read. Not the Square Catalog API, not any vendor's response.
-- **Price-node matching covers the demo markup only.** A visible price is found only as `<h3 class="item-name">Name</h3>` directly followed by `<div class="item-price">$N.NN</div>`, with sections taken from `<h2 class="cat-title">`. JSON-LD is found only as a `MenuItem` whose `"name"` comes right after `"@type"` (an `"@id"` in between is allowed) and whose `offers.price` is a string with two decimals. Other markup is not read; without `--strict`, a `$<digit>` or a `"price":` key the baker could not read is reported as a `WARN` with file and line and left as is. Only `.html` files are read (not `.htm`).
+- **Price-node matching covers the demo markup only.** A visible price is found only as `<h3 class="item-name">Name</h3>` directly followed by `<div class="item-price">$N.NN</div>`, with sections taken from `<h2 class="cat-title">`. JSON-LD is found only as a `MenuItem` whose `"name"` comes right after `"@type"` (an `"@id"` in between is allowed) and whose `offers.price` is a string with two decimals. Other markup is not read; it stops the run unless `--allow-unread` is passed, in which case it is reported as a `WARN` with file and line and left as is. Only `.html` files are read (not `.htm`).
 - **Unknown names are left alone silently.** An unanchored row whose name is not in the catalog is not priced and not flagged. Names are compared after whitespace/case folding only; an HTML entity in the page (`&amp;`) does not match the raw character in the feed, so such a row stays unanchored until an id is added by hand.
-- **The consistency check covers anchored nodes only.** A price node without `data-sq-item` / `"identifier"` is not checked. It does not check that a visible node and a JSON-LD entry both exist for every id, nor that the name next to an id matches the catalog name — ids, not names, are the key.
+- **The consistency check covers anchored nodes only.** A price node without `data-sq-item` / `"identifier"` is not checked (the baker's default refuses such nodes before they are committed). Every snapshot id must have both a visible node and a JSON-LD entry somewhere on the site; the check does not verify that the name next to an id matches the catalog name — ids, not names, are the key.
 - **Formats.** Dollar sign and exactly two decimals; one currency (`USD` in the JSON-LD is whatever the page already says). A visible price with a thousands separator (`$1,000.00`) is read, and written back with one; JSON-LD prices are written without separators (`"1000.00"`).
 - **Fetching.** `--src` accepts an `https:` URL only, with no `user:password@` part, and fetches it with no authentication, a 15-second idle timeout, a 30-second overall deadline, and an 8 MiB response ceiling. The host must resolve only to public addresses — loopback, RFC 1918, carrier-NAT, link-local, multicast, reserved, documentation and benchmarking ranges are refused, as are IPv6 forms that embed an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::`, 6to4 `2002::`) — checked before the fetch and again when the connection opens. Redirects are refused: point `--src` at the final URL. A real POS API that needs a token is out of scope for this repo.
 - **Snapshot provenance.** The snapshot records the source path (for a URL, origin and path only: no query string, fragment or credentials) and the feed's `cachedAt`, not who ran the baker or when.
@@ -117,7 +116,7 @@ What that does **not** give you:
 
 | Path | What it is |
 |---|---|
-| `bin/bake-prices.mjs` | The baker. `--check` (no write) / `--write` (rewrite in place). |
+| `bin/bake-prices.mjs` | The baker. `--check` (no write) / `--write` (rewrite in place); `--allow-unread` to tolerate price-like markup it cannot read. |
 | `lib/guards.mjs` | The input checks the baker runs first: feed-id and feed-price shape, flag values, `https:`-only sources, public-address checks before the fetch and at connect time, no redirects, bounded response body, atomic file replacement, symlink refusal. |
 | `lib/extract.mjs` | The read-only extractors the parity check uses (visible node, JSON-LD MenuItem), bounded per item. |
 | `package-lock.json` | Empty-dependency lockfile, so `npm audit` can run. There are no dependencies. |
@@ -130,7 +129,7 @@ What that does **not** give you:
 | `test/hardening.test.js` | Regression tests from the October 2026 audit, one per confirmed finding (see `docs/AUDIT-2026-10.md`). |
 | `docs/AUDIT-2026-10.md` | The audit record: what was checked, what was reproduced, what was changed, what remains. |
 | `test/fixtures/` | Neutral catalogs and pages for the two test files above. |
-| `.github/workflows/ci.yml` | Drift check (`--check --strict`) + consistency check in CI; read-only token, actions pinned by SHA. |
+| `.github/workflows/ci.yml` | Drift check + consistency check in CI; read-only token, actions pinned by SHA. |
 
 ## Using your own catalog
 
