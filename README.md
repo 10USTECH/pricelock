@@ -13,7 +13,7 @@ node --test                        # offline check: visible == JSON-LD == snapsh
 
 No install step, no dependencies, no tokens, no database.
 
-**What this repo is not:** it does not talk to the Square Catalog API, or to any point-of-sale system. The demo catalog is a **demo fixture** in a simplified menu-feed shape (below). Using a real POS means writing an adapter that turns its API response into that shape.
+**What this repo is, and is not:** the baker reads a simplified menu-feed shape (below), never a vendor API directly. One adapter ships with it — `bin/square-to-feed.mjs`, which turns a Square location's catalog into that shape, read-only, token from the environment, testable offline. Other POS systems need an adapter of their own. The bundled demo catalog is a **demo fixture**, not a real menu.
 
 ---
 
@@ -84,13 +84,13 @@ Every check below stops the run before a single file is written (exit 1, named c
 
 ## Known limits
 
-- **Catalog shape.** Only the simplified feed shape below is read. Not the Square Catalog API, not any vendor's response.
+- **Catalog shape.** Only the simplified feed shape below is read (v2 with integer `amountMinor`, or the older v1 with float `price`). Not a vendor's response — that is what an adapter is for. Prices are integer cents inside the baker; a v1 float is converted once, at load, after being checked for whole cents. Only `USD` is formatted; a v2 feed declaring another currency is refused.
 - **Price-node matching covers the demo markup only.** A visible price is found only as `<h3 class="item-name">Name</h3>` directly followed by `<div class="item-price">$N.NN</div>`, with sections taken from `<h2 class="cat-title">`. JSON-LD is found only as a `MenuItem` whose `"name"` comes right after `"@type"` (an `"@id"` in between is allowed) and whose `offers.price` is a string with two decimals. Other markup is not read; it stops the run unless `--allow-unread` is passed, in which case it is reported as a `WARN` with file and line and left as is. Only `.html` files are read (not `.htm`).
 - **Unknown names are left alone silently.** An unanchored row whose name is not in the catalog is not priced and not flagged. Names are compared after whitespace/case folding only; an HTML entity in the page (`&amp;`) does not match the raw character in the feed, so such a row stays unanchored until an id is added by hand.
 - **The consistency check covers anchored nodes only.** A price node without `data-sq-item` / `"identifier"` is not checked (the baker's default refuses such nodes before they are committed). Every snapshot id must have both a visible node and a JSON-LD entry somewhere on the site; the check does not verify that the name next to an id matches the catalog name — ids, not names, are the key.
 - **Formats.** Dollar sign and exactly two decimals; one currency (`USD` in the JSON-LD is whatever the page already says). A visible price with a thousands separator (`$1,000.00`) is read, and written back with one; JSON-LD prices are written without separators (`"1000.00"`).
 - **Fetching.** `--src` accepts an `https:` URL only, with no `user:password@` part, and fetches it with no authentication, a 15-second idle timeout, a 30-second overall deadline, and an 8 MiB response ceiling. The host must resolve only to public addresses — loopback, RFC 1918, carrier-NAT, link-local, multicast, reserved, documentation and benchmarking ranges are refused, as are IPv6 forms that embed an IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::`, 6to4 `2002::`) — checked before the fetch and again when the connection opens. Redirects are refused: point `--src` at the final URL. A real POS API that needs a token is out of scope for this repo.
-- **Snapshot provenance.** The snapshot records the source path (for a URL, origin and path only: no query string, fragment or credentials) and the feed's `cachedAt`, not who ran the baker or when.
+- **Snapshot provenance.** The snapshot (v2) records the source path (for a URL, origin and path only: no query string, fragment or credentials), the feed's `cachedAt`, `locationId` and `currency`, and integer `amountMinor` per id — not who ran the baker or when.
 - **Freshness.** Nothing runs on a schedule. Prices are as current as the last `--write` that was committed.
 
 ## Writes and recovery
@@ -117,6 +117,8 @@ What that does **not** give you:
 | Path | What it is |
 |---|---|
 | `bin/bake-prices.mjs` | The baker. `--check` (no write) / `--write` (rewrite in place); `--allow-unread` to tolerate price-like markup it cannot read. |
+| `bin/square-to-feed.mjs` | The Square adapter: one location's catalog → v2 feed. Token from env; `--input` for offline runs. |
+| `lib/square.mjs` | The pure Square-objects → feed transform behind the adapter. |
 | `lib/guards.mjs` | The input checks the baker runs first: feed-id and feed-price shape, flag values, `https:`-only sources, public-address checks before the fetch and at connect time, no redirects, bounded response body, atomic file replacement, symlink refusal. |
 | `lib/extract.mjs` | The read-only extractors the parity check uses (visible node, JSON-LD MenuItem), bounded per item. |
 | `package-lock.json` | Empty-dependency lockfile, so `npm audit` can run. There are no dependencies. |
@@ -126,7 +128,8 @@ What that does **not** give you:
 | `test/parity.test.js` | The offline three-way consistency check. |
 | `test/security.test.js` | The input checks: feed-id shape, `https:`-only and public-address sources (incl. a DNS-rebinding case), redirects, credentials, flag values. No network needed. |
 | `test/baker.test.js` | The baker on fixtures: drift, ambiguous name, missing id, `$1,000.00`, subfolders, unreadable-price warnings. Each runs in a temp copy. |
-| `test/hardening.test.js` | Regression tests from the October 2026 audit, one per confirmed finding (see `docs/AUDIT-2026-10.md`). |
+| `test/hardening.test.js` | Regression tests from the October 2026 audit, one per confirmed finding (see `docs/AUDIT-2026-10.md`), plus the v2 catalog-shape rules. |
+| `test/square.test.js` | The Square adapter on a recorded-shape fixture: twins, location overrides, variations, variable pricing, skips, refusals, and an end-to-end bake. |
 | `docs/AUDIT-2026-10.md` | The audit record: what was checked, what was reproduced, what was changed, what remains. |
 | `test/fixtures/` | Neutral catalogs and pages for the two test files above. |
 | `.github/workflows/ci.yml` | Drift check + consistency check in CI; read-only token, actions pinned by SHA. |
@@ -141,17 +144,35 @@ node bin/bake-prices.mjs --write --src ./my-catalog.json --site ./public --snaps
 
 There is deliberately **no** `.env`, no secret, and no real catalog anywhere in this repo. Keep it that way: commit prices, never keys.
 
-Catalog shape (the demo fixture's format; not a vendor API):
+Catalog shape v2 (what the Square adapter writes and the demo uses):
 
 ```json
 {
+  "schemaVersion": 2,
   "cachedAt": "2026-01-01T00:00:00Z",
+  "locationId": "…",
+  "currency": "USD",
   "menu": [
-    { "name": "Lunch",  "items": [ { "id": "…", "name": "…", "price": 12.00 } ] },
-    { "name": "Dinner", "items": [ { "id": "…", "name": "…", "price": 16.00 } ] }
+    { "name": "Lunch",  "items": [ { "id": "…", "name": "…", "amountMinor": 1200 } ] },
+    { "name": "Dinner", "items": [ { "id": "…", "name": "…", "amountMinor": 1600 } ] }
   ]
 }
 ```
+
+`amountMinor` is an integer in the currency's minor unit (`1200` is $12.00). An item without `amountMinor` (variable-priced) is on the menu but not baked. The v1 shape — no `schemaVersion`, float `"price": 12.00` — is still read.
+
+### From Square
+
+```bash
+SQUARE_ACCESS_TOKEN=… node bin/square-to-feed.mjs --location <LOCATION_ID> --out my-catalog.json
+node bin/bake-prices.mjs --check --src my-catalog.json --site ./public --snapshot ./public/prices.snapshot.json
+```
+
+The token is read from the environment only and never printed; the only host contacted is `connect.squareup.com` (`--sandbox`: `connect.squareupsandbox.com`), fixed in the code — that is an allowlist, not a validator. The adapter calls `POST /v2/catalog/search` for `ITEM` and `CATEGORY` objects, paginates, and emits one feed item per fixed-priced **variation** present at that location (the variation is the object that carries the price; two variations of one item get `Item (Variation)` names). A per-location price override wins over the base price. Deleted, archived, unsellable and not-at-this-location objects are skipped and listed on stderr. `cachedAt` is the catalog's latest `updated_at`, so an unchanged catalog re-fetches to a byte-identical feed and `--check` stays green.
+
+To review what Square returned before any price reaches a page, or to run with no network at all, save the raw search response(s) and pass `--input saved.json` — the adapter is tested that way (`test/square.test.js`).
+
+Not converted (by design): modifier pricing, scheduled pricing rules, tax-inclusive display, item options. Those change what a customer pays, not a variation's list price.
 
 ## Status
 

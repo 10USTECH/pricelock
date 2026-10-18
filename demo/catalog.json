@@ -1,18 +1,21 @@
 {
+  "schemaVersion": 2,
   "cachedAt": "2026-01-01T00:00:00Z",
+  "locationId": "DEMO-LOCATION",
+  "currency": "USD",
   "menu": [
     {
       "name": "Lunch",
       "items": [
-        { "id": "HOUSESALADLUNCH0000000001", "name": "House Salad", "price": 12.00 },
-        { "id": "GARDENSALAD00000000000001", "name": "Garden Salad", "price": 9.00 }
+        { "id": "HOUSESALADLUNCH0000000001", "name": "House Salad", "amountMinor": 1200 },
+        { "id": "GARDENSALAD00000000000001", "name": "Garden Salad", "amountMinor": 900 }
       ]
     },
     {
       "name": "Dinner",
       "items": [
-        { "id": "HOUSESALADDINNER000000002", "name": "House Salad", "price": 16.00 },
-        { "id": "TIRAMISU00000000000000003", "name": "Tiramisu", "price": 7.50 }
+        { "id": "HOUSESALADDINNER000000002", "name": "House Salad", "amountMinor": 1600 },
+        { "id": "TIRAMISU00000000000000003", "name": "Tiramisu", "amountMinor": 750 }
       ]
     }
   ]

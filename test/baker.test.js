@@ -38,7 +38,7 @@ test('drift: a changed catalog price fails --check, --write fixes it, then --che
   const html = t.read('menu.html');
   assert.match(html, /data-sq-item="PASTA0000000000000000001">\$13\.00</);
   assert.match(html, /"price": "13\.00"/);
-  assert.equal(JSON.parse(fs.readFileSync(t.snapshot, 'utf8')).items.PASTA0000000000000000001.price, 13);
+  assert.equal(JSON.parse(fs.readFileSync(t.snapshot, 'utf8')).items.PASTA0000000000000000001.amountMinor, 1300);
 
   r = t.run('--check');
   assert.equal(r.status, 0, r.stderr);

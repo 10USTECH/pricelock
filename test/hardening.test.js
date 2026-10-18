@@ -267,3 +267,57 @@ test('F10: a missing --src file exits 1 with a one-line message', () => {
   assert.match(r.stderr, /^bake-prices FAIL: cannot read --src/);
   assert.doesNotMatch(r.stderr, /at .*\.mjs:\d+/, 'no stack trace');
 });
+
+// ── V2. catalog shape v2: integer cents, currency, location ─────────────────
+test('V2: a v2 feed with amountMinor bakes, and the snapshot carries currency and location', () => {
+  const cat = { schemaVersion: 2, currency: 'USD', locationId: 'LDEVON0000000001', menu: [{ name: 'Lunch', items: [{ id: ID, name: 'Pasta', amountMinor: 1299 }] }] };
+  const t = scratch('v2', { 'menu.html': VISIBLE('1.00') }, cat);
+  const r = t.run('--write');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(t.read('menu.html'), new RegExp(`data-sq-item="${ID}">\\$12\\.99<`));
+  const s = JSON.parse(fs.readFileSync(t.snapshot, 'utf8'));
+  assert.deepEqual([s.schemaVersion, s.currency, s.locationId, s.items[ID].amountMinor], [2, 'USD', 'LDEVON0000000001', 1299]);
+});
+
+test('V2: a v1 feed (float price) still bakes and its snapshot is written in cents', () => {
+  const t = scratch('v1', { 'menu.html': VISIBLE('1.00') }, catalog([{ id: ID, name: 'Pasta', amountMinor: 9999, price: 12.1 }]));
+  const r = t.run('--write');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(t.read('menu.html'), /\$12\.10</, 'v1 reads price, ignores amountMinor');
+  assert.equal(JSON.parse(fs.readFileSync(t.snapshot, 'utf8')).items[ID].amountMinor, 1210);
+});
+
+for (const [patch, why] of [
+  [{ amountMinor: 12.99 }, 'not an integer'],
+  [{ amountMinor: -1 }, 'not an integer'],
+  [{ amountMinor: 1e11 }, 'not an integer'],
+]) {
+  test(`V2: amountMinor ${patch.amountMinor} is refused`, () => {
+    const cat = { schemaVersion: 2, currency: 'USD', menu: [{ name: 'L', items: [{ id: ID, name: 'Pasta', ...patch }] }] };
+    const t = scratch('v2bad', { 'menu.html': VISIBLE('1.00') }, cat);
+    const r = t.run('--write');
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, new RegExp(why));
+    assert.match(t.read('menu.html'), /\$1\.00</, 'nothing written');
+  });
+}
+
+test('V2: a non-USD currency and an unknown schemaVersion are refused before anything is written', () => {
+  let t = scratch('v2cur', { 'menu.html': VISIBLE('1.00') }, { schemaVersion: 2, currency: 'CAD', menu: [{ name: 'L', items: [{ id: ID, name: 'Pasta', amountMinor: 100 }] }] });
+  let r = t.run('--write');
+  assert.equal(r.status, 1); assert.match(r.stderr, /currency "CAD" is not supported/);
+  t = scratch('v3', { 'menu.html': VISIBLE('1.00') }, { schemaVersion: 3, currency: 'USD', menu: [{ name: 'L', items: [{ id: ID, name: 'Pasta', amountMinor: 100 }] }] });
+  r = t.run('--write');
+  assert.equal(r.status, 1); assert.match(r.stderr, /schemaVersion 3 is not supported/);
+});
+
+test('V2: the price tie-break between twins is exact in cents', () => {
+  // Two "Soup" entries at 6.00 and 6.01; the page says $6.01 → resolves to the second.
+  const cat = { schemaVersion: 2, currency: 'USD', menu: [{ name: 'L', items: [
+    { id: 'SOUPA0000000000000000001', name: 'Soup', amountMinor: 600 },
+    { id: 'SOUPB0000000000000000002', name: 'Soup', amountMinor: 601 }] }] };
+  const t = scratch('tie', { 'menu.html': `<h3 class="item-name">Soup</h3><div class="item-price">$6.01</div>\n` }, cat);
+  const r = t.run('--write');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(t.read('menu.html'), /data-sq-item="SOUPB0000000000000000002">\$6\.01</);
+});

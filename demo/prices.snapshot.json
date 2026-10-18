@@ -1,22 +1,25 @@
 {
+  "schemaVersion": 2,
   "source": "demo/catalog.json",
   "cachedAt": "2026-01-01T00:00:00Z",
+  "locationId": "DEMO-LOCATION",
+  "currency": "USD",
   "items": {
     "GARDENSALAD00000000000001": {
       "name": "Garden Salad",
-      "price": 9
+      "amountMinor": 900
     },
     "HOUSESALADDINNER000000002": {
       "name": "House Salad",
-      "price": 16
+      "amountMinor": 1600
     },
     "HOUSESALADLUNCH0000000001": {
       "name": "House Salad",
-      "price": 12
+      "amountMinor": 1200
     },
     "TIRAMISU00000000000000003": {
       "name": "Tiramisu",
-      "price": 7.5
+      "amountMinor": 750
     }
   }
 }
