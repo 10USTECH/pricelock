@@ -50,14 +50,16 @@ test('every visible price matches the snapshot', () => {
   assert.ok(checked > 0, 'no visible price nodes found — is the site anchored?');
 });
 
-test('every JSON-LD price matches the snapshot', () => {
+test('every JSON-LD price and currency matches the snapshot', () => {
   let checked = 0;
   for (const f of htmlFiles) {
     const html = fs.readFileSync(path.join(SITE, f), 'utf8');
-    for (const { id, price } of jsonLdPrices(html)) {
+    for (const { id, price, currency } of jsonLdPrices(html)) {
       const want = snapPrice(id);
       assert.ok(want !== undefined, `${f}: JSON-LD id ${id} is not in the snapshot`);
       assert.equal(price, want, `${f}: JSON-LD price $${price} for ${id} != snapshot $${want}`);
+      // The offer is (id, price, currency): a right number in the wrong currency is a wrong price.
+      assert.equal(currency, snapshot.currency, `${f}: JSON-LD priceCurrency ${currency} for ${id} != snapshot ${snapshot.currency}`);
       checked++;
     }
   }

@@ -29,8 +29,9 @@
 //   Empty/malformed catalog, a feed id that is not a catalog id (it would be written into
 //   HTML), a feed price toFixed(2) cannot render faithfully, one id with two prices, an
 //   anchored id missing from the catalog, an unanchored node that resolves to more than one
-//   candidate, an anchor attribute or JSON-LD shape the text transforms cannot handle
-//   safely, a symlink under --site -> exit 1, write nothing. Every file is baked in memory
+//   candidate, an anchor attribute the visible transform cannot handle safely, a JSON-LD
+//   block with a duplicate key or a managed offer that is not one Offer with a "price"
+//   string, a symlinked file or directory under --site -> exit 1, write nothing. Every file is baked in memory
 //   first and written only after the whole site has baked cleanly; each file is then
 //   replaced atomically (temp + fsync + rename). README "Writes and recovery" has the limits.
 //
@@ -61,6 +62,7 @@ import {
   assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml,
   centsToText, textToCents, formatPrice,
 } from '../lib/guards.mjs';
+import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs } from '../lib/jsonld.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_SRC      = path.join(ROOT, 'demo', 'catalog.json');
@@ -240,89 +242,137 @@ function tVisible(html, cat, seen) {
   });
 }
 
-// JSON-LD MenuItems (pretty OR minified). Ensures "identifier":"<id>" and offers.price.
-// Bounded so one item's span can never bleed into the next MenuItem.
-const RE_JSONLD = /("@type":\s*"MenuItem"\s*,\s*)((?:"@id":\s*"[^"]*"\s*,\s*)?)("name":\s*")([^"]+)(")((?:(?!"@type":\s*"MenuItem")[\s\S])*?)("price":\s*")([0-9]+\.[0-9]{2})(")/g;
-function tJsonLd(html, cat, seen) {
-  return html.replace(RE_JSONLD, (m, head, atId, nOpen, name, nClose, mid, pOpen, price, pClose) => {
-    const cur = textToCents(price);
-    let id = (m.match(/"identifier":\s*"([^"]+)"/) || [])[1];
-    let rec;
-    if (id && isId(id)) { rec = { id, price: priceForId(cat, id, `JSON-LD "${name}"`) }; }
-    else {
-      rec = resolveUnanchored(cat, name, cur, null);           // JSON-LD has no section; price tie-break suffices
-      if (!rec) return m;                                      // leave-alone node
-    }
-    seen.add(rec.id);
-    const pretty = /\n/.test(mid) || /\n/.test(head);
-    let out = head + atId + nOpen + name + nClose;
-    if (/"identifier":/.test(m)) {
-      out += mid.replace(/"identifier":\s*"[^"]*"/, `"identifier": "${rec.id}"`);
-    } else if (pretty) {
-      const indent = (mid.match(/\n(\s*)"/) || [, '        '])[1];
-      out += `,\n${indent}"identifier": "${rec.id}"` + mid;
-    } else {
-      out += `, "identifier": "${rec.id}"` + mid;
-    }
-    out += pOpen + money(rec.price) + pClose;
-    return out;
-  });
-}
+// JSON-LD (lib/jsonld.mjs): every ld+json block is PARSED, not pattern-matched. Each
+// MenuItem is resolved to a catalog record (by "identifier", else by name with the same
+// fail-closed tie-break as the visible side), and the three facts of its one Offer are made
+// to match the catalog: the id ("identifier"), the price, and the currency
+// ("priceCurrency"). Edits are made to the value spans only, so key order, whitespace and
+// every unrelated byte are preserved, and an already-correct block is left byte-identical.
+//
+// Refused (exit 1, nothing written): a block that mentions a MenuItem or a price but is
+// not valid JSON; a duplicate key anywhere in a block (parsers keep the LAST value, so the
+// value a crawler reads would differ from the one checked); a managed MenuItem whose offer
+// is not a single Offer with a "price" string; MenuItem text outside an ld+json block.
+//
+// Reported as unread (strict default: refused): any price-bearing key (PRICE_KEYS) that is
+// not the "price" of a managed item's single offer — a Product's AggregateOffer, a second
+// price inside a managed item, a priceSpecification, and so on.
+const RE_MENUITEM_TEXT = /"@type"\s*:\s*"(?:[^"]*[/:#])?MenuItem"/g;
+const lineAt = (s, idx) => s.slice(0, idx).split('\n').length;
 
-// JSON-LD structure the regex transform above relies on. RE_JSONLD rewrites a MenuItem by
-// text, so three shapes it cannot handle safely are refused before anything is written:
-//   1. a MenuItem whose "identifier" comes AFTER its offers.price — the transform would not
-//      see it and would insert a second "identifier" key (a duplicate key; parsers keep the
-//      last one, i.e. the stale one);
-//   2. MenuItem text that is not inside a <script type="application/ld+json"> block (an
-//      HTML comment, a <pre> code sample) — it is not structured data and must not be baked;
-//   3. an ld+json block that contains MenuItem text but is not valid JSON — the regex would
-//      still rewrite inside it, and nothing would parse the result.
-const RE_LDJSON_BLOCK = /<script\b[^>]*\btype\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script\s*>/gi;
-const RE_MENUITEM = /"@type":\s*"MenuItem"/g;
-function checkJsonLdStructure(html, f) {
-  const blocks = [];
-  let b;
-  while ((b = RE_LDJSON_BLOCK.exec(html))) blocks.push({ start: b.index, end: b.index + b[0].length, text: b[1] });
-  let m;
-  while ((m = RE_MENUITEM.exec(html))) {
-    const line = html.slice(0, m.index).split('\n').length;
-    if (!blocks.some(k => m.index >= k.start && m.index < k.end)) {
-      die(`${f}:${line}: MenuItem markup outside a <script type="application/ld+json"> block — not structured data; refusing to bake it`);
+function tJsonLd(html, f, cat, seen, unreadLines) {
+  const blocks = ldBlocks(html);
+  // MenuItem text outside any ld+json block is not structured data: refuse to bake it.
+  RE_MENUITEM_TEXT.lastIndex = 0;
+  let mt;
+  while ((mt = RE_MENUITEM_TEXT.exec(html))) {
+    if (!blocks.some(k => mt.index >= k.outerStart && mt.index < k.outerEnd)) {
+      die(`${f}:${lineAt(html, mt.index)}: MenuItem markup outside a <script type="application/ld+json"> block — not structured data; refusing to bake it`);
     }
   }
-  for (const k of blocks) {
-    if (!/"@type":\s*"MenuItem"/.test(k.text)) continue;
-    let doc;
-    try { doc = JSON.parse(k.text); }
-    catch (e) { die(`${f}: a JSON-LD block containing MenuItem is not valid JSON (${e.message})`); }
-    const walk = node => {
-      if (Array.isArray(node)) { node.forEach(walk); return; }
-      if (!node || typeof node !== 'object') return;
-      if (node['@type'] === 'MenuItem') {
-        const keys = Object.keys(node);
-        const iId = keys.indexOf('identifier'), iOff = keys.indexOf('offers');
-        if (iId > -1 && iOff > -1 && iId > iOff) {
-          die(`${f}: MenuItem "${node.name}" lists "identifier" after "offers" — the baker reads "identifier" before the price; move it above "offers"`);
-        }
+  const edits = [];   // { start, end, text } — absolute offsets into html
+  for (const b of blocks) {
+    let tree;
+    try { tree = parseStrict(b.text); }
+    catch (e) {
+      const at = Number.isInteger(e.offset) ? `:${lineAt(html, b.start + e.offset)}` : '';
+      if (/duplicate key/.test(e.message)) {
+        die(`${f}${at}: JSON-LD ${e.message.replace(/ at offset \d+$/, '')} — parsers keep the LAST value, so a crawler would read a different value than the one checked; remove the duplicate`);
       }
-      Object.values(node).forEach(walk);
-    };
-    walk(doc);
+// A block a strict parser cannot read is refused whatever it seems to contain: its keys
+      // can be \u-escaped past any text hint, and other parsers may be more lenient (R2).
+      die(`${f}${at}: a JSON-LD block ${looksLikeMenuItem(b.text) ? 'containing MenuItem ' : ''}is not valid JSON (${e.message.replace(/ at offset \d+$/, '')}) — fix or remove it`);
+    }
+    const owned = new Set();                                     // keyStart of price keys this run reads
+    const ownSubtree = node => { for (const { node: o } of objects(node)) for (const m of o.members) if (PRICE_FACT_KEYS.has(m.key)) owned.add(m.keyStart); };
+    for (const { node: item } of objects(tree)) {
+      if (!hasType(item, 'MenuItem')) continue;
+      const nameNode = item.get('name');
+      const name = nameNode && nameNode.kind === 'string' ? nameNode.value : null;
+      const idNode = item.get('identifier');
+      const id = idNode && idNode.kind === 'string' ? idNode.value : null;
+      const off = singleOffer(item);
+      let rec;
+      if (id && isId(id)) rec = { id, price: priceForId(cat, id, `JSON-LD "${name}"`) };
+      else {
+        const cur = off.price ? textToCents(off.price.value) : NaN;
+        rec = name ? resolveUnanchored(cat, name, cur, null) : null;   // JSON-LD has no section; price tie-break
+        if (!rec) { ownSubtree(item); continue; }                // not a catalog item: leave alone
+      }
+      if (!off.offer) die(`${f}: JSON-LD MenuItem "${name}" (${rec.id}) ${off.why} — a managed item needs exactly one Offer with a "price" string; refusing to bake it`);
+      seen.add(rec.id);
+      owned.add(off.offer.members.find(m => m.key === 'price').keyStart);
+      const abs = n => ({ start: b.start + n.start, end: b.start + n.end });
+      // price
+      const want = money(rec.price);
+      if (off.price.value !== want) edits.push({ ...abs(off.price), text: JSON.stringify(want) });
+      // currency: the offer is (id, price, currency) — all three come from the catalog
+      if (off.currency) {
+        owned.add(off.offer.members.find(m => m.key === 'priceCurrency').keyStart);
+        if (off.currency.kind !== 'string' || off.currency.value !== cat.currency) edits.push({ ...abs(off.currency), text: JSON.stringify(cat.currency) });
+      } else {
+        const at = b.start + off.price.end;
+        edits.push({ start: at, end: at, text: `, "priceCurrency": ${JSON.stringify(cat.currency)}` });
+      }
+      // identifier
+      if (idNode) {
+        if (id !== rec.id) edits.push({ ...abs(idNode), text: JSON.stringify(rec.id) });
+      } else {
+        const after = item.members.find(m => m.key === 'name') || item.members.find(m => m.key === '@type');
+        const at = b.start + after.value.end;
+        const nextKey = item.members[item.members.indexOf(after) + 1];
+        const gap = nextKey ? b.text.slice(after.value.end, nextKey.keyStart) : '';
+        const nl = gap.lastIndexOf('\n');
+        edits.push({ start: at, end: at, text: nl > -1 ? `,\n${gap.slice(nl + 1)}"identifier": "${rec.id}"` : `, "identifier": "${rec.id}"` });
+      }
+    }
+    for (const { node: o } of objects(tree)) {
+      for (const m of o.members) if (PRICE_FACT_KEYS.has(m.key) && !owned.has(m.keyStart)) unreadLines.push(lineAt(html, b.start + m.keyStart));
+    }
   }
+  edits.sort((a, b) => b.start - a.start);
+  for (const e of edits) html = html.slice(0, e.start) + e.text + html.slice(e.end);
+  return html;
 }
 
-// Price-like markup the transforms above did not read: a "$<digit>" outside a visible price
-// node, or a "price": key outside a JSON-LD MenuItem. Reported as file:line; never fails.
+// Price-like markup OUTSIDE JSON-LD that the visible transform did not read. This is a
+// lexical detector (it does not render the page). Character references are decoded first
+// (numeric with or without the ";", and &dollar; / &nbsp;), so "$" and digits written as
+// references are seen. Then it looks for: a dollar sign ($, ＄, ﹩) followed by a digit
+// (ASCII or full-width), seeing through whitespace, no-break and zero-width spaces, inline
+// tags and HTML comments; any JSON-style key that decodes to a price key; microdata and
+// Open Graph price properties. GUARANTEES.md lists what it cannot see.
+// Bounded on purpose: an unbounded tag/comment skip rescans to the end of the file for
+// every "$" with no closing ">" — quadratic (a 400 KB page took 61 s). A price split by more
+// than 16 tags/comments, or by one longer than 256 characters, is not followed.
+const GAP = String.raw`(?:[\s\u00a0\u200b-\u200d\u2060\ufeff\u00ad]|<!--[\s\S]{0,256}?-->|<[^>]{0,256}>){0,16}`;
+const VISIBLE_PRICE_PATTERNS = [
+  new RegExp(String.raw`[$\uFF04\uFE69]${GAP}[0-9\uFF10-\uFF19]`, 'g'),
+  /\bitemprop\s*=\s*["']?(?:price|lowPrice|highPrice|minPrice|maxPrice)\b/gi,
+  /\b(?:property|name)\s*=\s*["']?(?:product|og):price:amount\b/gi,
+];
+const RE_JSON_KEY = /"((?:[^"\\\n]|\\.){1,64})"\s*:/g;
 function unreadPrices(html) {
   const blank = s => s.replace(/[^\n]/g, ' ');
-  let masked = html.replace(RE_VISIBLE, blank).replace(RE_JSONLD, blank);
+  let masked = html;
+  for (const k of ldBlocks(html).reverse()) masked = masked.slice(0, k.start) + blank(masked.slice(k.start, k.end)) + masked.slice(k.end);
+  masked = masked.replace(RE_VISIBLE, blank);
+  // decode references line by line so a decoded "\n" can never shift a reported line number
+  masked = masked.split('\n').map(l => decodeCharRefs(l).replace(/[\r\n]/g, ' ')).join('\n');
   const hits = [];
-  for (const re of [/\$\s*[0-9]/g, /"price"\s*:/g]) {
+  for (const re of VISIBLE_PRICE_PATTERNS) {
+    re.lastIndex = 0;
     let m;
-    while ((m = re.exec(masked))) hits.push(masked.slice(0, m.index).split('\n').length);
+    while ((m = re.exec(masked))) hits.push(lineAt(masked, m.index));
   }
-  return [...new Set(hits)].sort((a, b) => a - b);
+  RE_JSON_KEY.lastIndex = 0;
+  let k;
+  while ((k = RE_JSON_KEY.exec(masked))) {
+    let key = null;
+    try { key = JSON.parse(`"${k[1]}"`); } catch { /* not a JSON string */ }
+    if (key !== null && PRICE_KEYS.has(key)) hits.push(lineAt(masked, k.index));
+  }
+  return hits;
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -339,11 +389,10 @@ let unread = 0;
 for (const f of htmlFiles) {
   const p = path.join(SITE, f);
   const before = fs.readFileSync(p, 'utf8');
-  checkJsonLdStructure(before, f);
-  let after = before;
-  after = tVisible(after, cat, seen);
-  after = tJsonLd(after, cat, seen);
-  for (const line of unreadPrices(after)) {
+  let after = tVisible(before, cat, seen);
+  const ldUnread = [];
+  after = tJsonLd(after, f, cat, seen, ldUnread);
+  for (const line of [...new Set([...ldUnread, ...unreadPrices(after)])].sort((a, b) => a - b)) {
     unread++;
     console.error(`bake-prices ${STRICT ? 'FAIL' : 'WARN'}: ${f}:${line}: price-like markup the baker cannot read — ${STRICT ? 'refused' : 'left as is (--allow-unread)'}`);
   }
