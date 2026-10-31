@@ -1,6 +1,6 @@
 {
   "name": "pricelock",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Reference implementation: write catalog prices into a static site's HTML, keyed by catalog item id, with a committed snapshot and an offline three-way consistency check.",
   "type": "module",
   "license": "MIT",

@@ -86,13 +86,16 @@ test('F2: a negative price in the feed stops the bake; "$-3.00" never reaches HT
 });
 
 // ── F3. JSON-LD shapes the text transform cannot handle ─────────────────────
-test('F3a: a MenuItem whose "identifier" follows "offers" is refused (no duplicate identifier key)', () => {
+test('F3a: a MenuItem whose "identifier" follows "offers" is baked in place (v1.4: parsed, no duplicate key added)', () => {
+  // v1.3 refused this valid shape because its regex read "identifier" only before the price.
+  // v1.4 parses the block, so order does not matter; the one identifier key is kept.
   const page = LD(`{"@type":"MenuItem","name":"Pasta","offers":{"@type":"Offer","price":"12.00"},"identifier":"${ID}"}`);
   const t = scratch('id-after', { 'menu.html': page }, catalog([{ id: ID, name: 'Pasta', price: 13 }]));
   const r = t.run('--write');
-  assert.equal(r.status, 1, r.stderr);
-  assert.match(r.stderr, /lists "identifier" after "offers"/);
-  assert.equal((t.read('menu.html').match(/"identifier"/g) || []).length, 1, 'exactly one identifier key, untouched');
+  assert.equal(r.status, 0, r.stderr);
+  const html = t.read('menu.html');
+  assert.match(html, /"price":"13\.00", "priceCurrency": "USD"/);
+  assert.equal((html.match(/"identifier"/g) || []).length, 1, 'exactly one identifier key');
 });
 
 test('F3b: MenuItem text outside an ld+json script (a <pre> sample) is refused, not baked', () => {
@@ -169,16 +172,21 @@ test('F5: the bundled demo passes the default (strict) check', () => {
 // ── F6. parity extractor paired one item's id with the next item's price ────
 test('F6: jsonLdPrices never reads a price from a later MenuItem', async () => {
   const { jsonLdPrices } = await extract();
-  const html = `{"@type":"MenuItem","name":"Market Fish","identifier":"MARKETFISH00000000000001"},
-{"@type":"MenuItem","name":"Soup","identifier":"SOUP00000000000000000001","offers":{"price":"9.00"}}`;
-  assert.deepEqual(jsonLdPrices(html), [{ id: 'SOUP00000000000000000001', price: '9.00' }]);
+  // v1.4: the extractor parses, so an identified item with no offer is reported with
+  // price: null (parity then FAILS on it) instead of being skipped.
+  const html = LD(`[{"@type":"MenuItem","name":"Market Fish","identifier":"MARKETFISH00000000000001"},
+{"@type":"MenuItem","name":"Soup","identifier":"SOUP00000000000000000001","offers":{"price":"9.00"}}]`);
+  assert.deepEqual(jsonLdPrices(html), [
+    { id: 'MARKETFISH00000000000001', price: null, currency: null },
+    { id: 'SOUP00000000000000000001', price: '9.00', currency: null },
+  ]);
 });
 
 test('F6: jsonLdPrices never reads an identifier from a later MenuItem', async () => {
   const { jsonLdPrices } = await extract();
-  const html = `{"@type":"MenuItem","name":"A","offers":{"price":"1.00"}},
-{"@type":"MenuItem","name":"B","identifier":"BBBBBBBBBBBBBBBBBBBB0001","offers":{"price":"2.00"}}`;
-  assert.deepEqual(jsonLdPrices(html), [{ id: 'BBBBBBBBBBBBBBBBBBBB0001', price: '2.00' }]);
+  const html = LD(`[{"@type":"MenuItem","name":"A","offers":{"price":"1.00"}},
+{"@type":"MenuItem","name":"B","identifier":"BBBBBBBBBBBBBBBBBBBB0001","offers":{"price":"2.00"}}]`);
+  assert.deepEqual(jsonLdPrices(html), [{ id: 'BBBBBBBBBBBBBBBBBBBB0001', price: '2.00', currency: null }]);
 });
 
 test('F6: the demo page still yields all four pairs', async () => {
