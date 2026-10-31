@@ -62,7 +62,7 @@ import {
   assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml,
   centsToText, textToCents, formatPrice,
 } from '../lib/guards.mjs';
-import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, looksLikeMenuItem, looksLikePrice } from '../lib/jsonld.mjs';
+import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs } from '../lib/jsonld.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_SRC      = path.join(ROOT, 'demo', 'catalog.json');
@@ -279,12 +279,12 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
       if (/duplicate key/.test(e.message)) {
         die(`${f}${at}: JSON-LD ${e.message.replace(/ at offset \d+$/, '')} — parsers keep the LAST value, so a crawler would read a different value than the one checked; remove the duplicate`);
       }
-      if (looksLikeMenuItem(b.text)) die(`${f}: a JSON-LD block containing MenuItem is not valid JSON (${e.message})`);
-      if (looksLikePrice(b.text)) die(`${f}: a JSON-LD block containing a price is not valid JSON (${e.message})`);
-      continue;                                                  // broken but price-free: not ours
+// A block a strict parser cannot read is refused whatever it seems to contain: its keys
+      // can be \u-escaped past any text hint, and other parsers may be more lenient (R2).
+      die(`${f}${at}: a JSON-LD block ${looksLikeMenuItem(b.text) ? 'containing MenuItem ' : ''}is not valid JSON (${e.message.replace(/ at offset \d+$/, '')}) — fix or remove it`);
     }
     const owned = new Set();                                     // keyStart of price keys this run reads
-    const ownSubtree = node => { for (const { node: o } of objects(node)) for (const m of o.members) if (PRICE_KEYS.has(m.key)) owned.add(m.keyStart); };
+    const ownSubtree = node => { for (const { node: o } of objects(node)) for (const m of o.members) if (PRICE_FACT_KEYS.has(m.key)) owned.add(m.keyStart); };
     for (const { node: item } of objects(tree)) {
       if (!hasType(item, 'MenuItem')) continue;
       const nameNode = item.get('name');
@@ -308,6 +308,7 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
       if (off.price.value !== want) edits.push({ ...abs(off.price), text: JSON.stringify(want) });
       // currency: the offer is (id, price, currency) — all three come from the catalog
       if (off.currency) {
+        owned.add(off.offer.members.find(m => m.key === 'priceCurrency').keyStart);
         if (off.currency.kind !== 'string' || off.currency.value !== cat.currency) edits.push({ ...abs(off.currency), text: JSON.stringify(cat.currency) });
       } else {
         const at = b.start + off.price.end;
@@ -326,7 +327,7 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
       }
     }
     for (const { node: o } of objects(tree)) {
-      for (const m of o.members) if (PRICE_KEYS.has(m.key) && !owned.has(m.keyStart)) unreadLines.push(lineAt(html, b.start + m.keyStart));
+      for (const m of o.members) if (PRICE_FACT_KEYS.has(m.key) && !owned.has(m.keyStart)) unreadLines.push(lineAt(html, b.start + m.keyStart));
     }
   }
   edits.sort((a, b) => b.start - a.start);
@@ -335,29 +336,41 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
 }
 
 // Price-like markup OUTSIDE JSON-LD that the visible transform did not read. This is a
-// lexical detector (it does not render the page): it looks for a dollar sign — written
-// literally, as an HTML entity (&#36; &#x24; &dollar;) or full-width/small form (＄ ﹩) —
-// followed by a digit, allowing whitespace, &nbsp; and inline tags in between; a "price":
-// key outside JSON-LD; and microdata / Open Graph price properties. GUARANTEES.md lists
-// what it cannot see.
+// lexical detector (it does not render the page). Character references are decoded first
+// (numeric with or without the ";", and &dollar; / &nbsp;), so "$" and digits written as
+// references are seen. Then it looks for: a dollar sign ($, ＄, ﹩) followed by a digit
+// (ASCII or full-width), seeing through whitespace, no-break and zero-width spaces, inline
+// tags and HTML comments; any JSON-style key that decodes to a price key; microdata and
+// Open Graph price properties. GUARANTEES.md lists what it cannot see.
+// Bounded on purpose: an unbounded tag/comment skip rescans to the end of the file for
+// every "$" with no closing ">" — quadratic (a 400 KB page took 61 s). A price split by more
+// than 16 tags/comments, or by one longer than 256 characters, is not followed.
+const GAP = String.raw`(?:[\s\u00a0\u200b-\u200d\u2060\ufeff\u00ad]|<!--[\s\S]{0,256}?-->|<[^>]{0,256}>){0,16}`;
 const VISIBLE_PRICE_PATTERNS = [
-  /\$(?:[\s ]|&nbsp;|<[^>]*>)*[0-9]/g,
-  /"price"\s*:/g,
+  new RegExp(String.raw`[$\uFF04\uFE69]${GAP}[0-9\uFF10-\uFF19]`, 'g'),
   /\bitemprop\s*=\s*["']?(?:price|lowPrice|highPrice|minPrice|maxPrice)\b/gi,
   /\b(?:property|name)\s*=\s*["']?(?:product|og):price:amount\b/gi,
 ];
+const RE_JSON_KEY = /"((?:[^"\\\n]|\\.){1,64})"\s*:/g;
 function unreadPrices(html) {
   const blank = s => s.replace(/[^\n]/g, ' ');
   let masked = html;
   for (const k of ldBlocks(html).reverse()) masked = masked.slice(0, k.start) + blank(masked.slice(k.start, k.end)) + masked.slice(k.end);
-  masked = masked.replace(RE_VISIBLE, blank)
-    .replace(/&(?:#0*36|#x0*24|dollar);/gi, '$')
-    .replace(/[＄﹩]/g, '$');
+  masked = masked.replace(RE_VISIBLE, blank);
+  // decode references line by line so a decoded "\n" can never shift a reported line number
+  masked = masked.split('\n').map(l => decodeCharRefs(l).replace(/[\r\n]/g, ' ')).join('\n');
   const hits = [];
   for (const re of VISIBLE_PRICE_PATTERNS) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(masked))) hits.push(lineAt(masked, m.index));
+  }
+  RE_JSON_KEY.lastIndex = 0;
+  let k;
+  while ((k = RE_JSON_KEY.exec(masked))) {
+    let key = null;
+    try { key = JSON.parse(`"${k[1]}"`); } catch { /* not a JSON string */ }
+    if (key !== null && PRICE_KEYS.has(key)) hits.push(lineAt(masked, k.index));
   }
   return hits;
 }

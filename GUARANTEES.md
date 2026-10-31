@@ -49,22 +49,29 @@ record), on every `.html` file under `--site` (not reached through any symbolic 
 
 - the visible price, the JSON-LD offer's `price`, and the snapshot agree with the catalog;
 - the JSON-LD offer's `priceCurrency` is the catalog currency, and its `identifier` is the id;
-- no JSON-LD block has a duplicate key, so what a parser reads is what was checked;
+- every ld+json block parses (an unparseable one is refused, never skipped) and none has a
+  duplicate key, so what a parser reads is what was checked;
+- no `priceCurrency` outside a managed offer can merge into it through a shared `@id`;
 - every other JSON-LD price key (`price`, `lowPrice`, `highPrice`, `minPrice`, `maxPrice`)
   and every price-like text the detector recognizes outside JSON-LD has been reported
   (strict: refused).
 
 ## What it does not guarantee
 
-- **The detector outside JSON-LD is lexical.** It sees a dollar sign (literal, `&#36;`,
-  `&#x24;`, `&dollar;`, `＄`, `﹩`) before a digit — through whitespace, `&nbsp;` and inline
-  tags — a `"price":` key, microdata `itemprop` price properties, and Open Graph
-  `product:price:amount`. It does not see a price in an image, in CSS `content`, rendered by
-  script, spelled out, or written without a currency sign.
+- **The detector outside JSON-LD is lexical.** After decoding character references it sees a
+  dollar sign (`$`, `＄`, `﹩`) before a digit (ASCII or full-width) — through whitespace,
+  no-break and zero-width spaces, and up to 16 inline tags or comments of up to 256
+  characters each — any JSON-style key that decodes to a price key, microdata `itemprop`
+  price properties, and Open Graph `product:price:amount`. It does not see a price in an
+  image, in CSS `content`, rendered by script, spelled out, written after the number
+  (`1.00 $`), or without a currency sign.
 - **Items whose name is not in the catalog are left alone,** silently, on both surfaces.
 - **HTML is matched by pattern, not parsed.** The visible node must be the documented markup
   (attribute order matters; other forms are refused, not mis-priced). The ld+json script
-  boundary is a pattern; a block inside an HTML comment is processed as if live.
+  boundary is found by pattern, with the `type` decoded as a browser decodes it; a block
+  inside an HTML comment is processed as if live. JSON-LD `@id` merging is accounted for
+  only for price and currency keys — not, for example, a second `identifier` merged onto an
+  item from another node.
 - **Writes:** each file is replaced atomically; the set of files is not. Power loss after a
   rename may lose the directory entry. Two bakers on one tree are not coordinated. A
   directory swapped for a symbolic link *between* listing and writing is not detected. The

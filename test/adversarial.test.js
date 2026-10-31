@@ -203,3 +203,63 @@ test('L3: a Square variation price with no currency is refused', async () => {
   delete v.item_variation_data.price_money.currency;
   assert.throws(() => squareToFeed(fixture, { locationId: 'LDEVON0000000001' }), /no currency/);
 });
+
+// ── Red-team round 2 (against the first v1.4 fix, before merge) ─────────────
+// A focused red-team of this branch found seven more bypasses. Each passed both gates.
+const T_LD = (typeAttr, body) => `<script type="${typeAttr}">${body}</script>\n`;
+const ESCAPED_ITEM = `{"@type":"Menu\\u0049tem","name":"Pasta","identifier":"${ID}","offers":{"@type":"Offer","pr\\u0069ce":"1.00","priceCurrency":"USD"}}`;
+const round2 = [
+  ['R1: a live ld+json block whose type is entity-encoded (ld&#x2B;json), with escaped keys',
+    html => html + T_LD('application/ld&#x2B;json', ESCAPED_ITEM)],
+  ['R1: a live ld+json block with type " application/LD+JSON; charset=utf-8"',
+    html => html + T_LD(' application/LD+JSON; charset=utf-8', ESCAPED_ITEM)],
+  ['R2: an ld+json block that is not valid JSON is refused even when its keys are escaped',
+    html => html + LD(`{"@type":"\\u004denuItem","name":"Pasta","identifier":"${ID}","offers":{"pr\\u0069ce":"1.00"},}`)],
+  ['R3: a separate node sharing the offer\'s @id adds priceCurrency EUR (JSON-LD node merging)',
+    html => html.replace('"offers":{"@type":"Offer","price":"13.00"', '"offers":{"@id":"#o1","@type":"Offer","price":"13.00"')
+      + LD('{"@id":"#o1","priceCurrency":"EUR"}')],
+  ['R4: &#36 with no semicolon before a tag (renders "$1.00")', html => html + '<p>Pasta today &#36<b>1.00</b></p>\n'],
+  ['R4: a zero-width space between $ and the digit', html => html + '<p>Pasta today $​1.00</p>\n'],
+  ['R4: &#160; between $ and the digit', html => html + '<p>Pasta today $&#160;1.00</p>\n'],
+  ['R4: full-width digits ($１.００)', html => html + '<p>Pasta today $１.００</p>\n'],
+  ['R4: digits written as character references ($&#49;.00)', html => html + '<p>Pasta today $&#49;.00</p>\n'],
+];
+for (const [name, mutate] of round2) {
+  test(`${name} fails --check`, () => {
+    const t = sealed('round2');
+    t.write(mutate(t.read()));
+    const r = t.run('--check');
+    assert.equal(r.status, 1, `must be caught: ${r.stdout}${r.stderr}`);
+    assert.doesNotMatch(r.stderr, /\n\s+at .*\.mjs:\d+/, 'a clean FAIL, not a stack trace');
+  });
+}
+
+test('R1: <script type="text/plain"> with JSON inside is not JSON-LD (and data-type does not count)', async () => {
+  const { ldBlocks } = await import('../lib/jsonld.mjs');
+  assert.equal(ldBlocks('<script data-type="application/ld+json" type="text/plain">{}</script>').length, 0);
+  assert.equal(ldBlocks('<script type="text/plain" type="application/ld+json">{}</script>').length, 0, 'the FIRST type attribute decides');
+  assert.equal(ldBlocks('<SCRIPT TYPE=application/ld+json>{}</SCRIPT >').length, 1);
+});
+
+test('R2: the parity extractor refuses an unparseable ld+json block instead of skipping it', async () => {
+  const { jsonLdPrices } = await extract();
+  assert.throws(() => jsonLdPrices(LD('{"@type":"Thing",}')), /not valid JSON/);
+});
+
+test('R2: a deeply nested block is a clean refusal, not a crash', () => {
+  const t = sealed('deep');
+  t.write(t.read() + LD('['.repeat(20000) + ']'.repeat(20000)));
+  const r = t.run('--check');
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^bake-prices FAIL: .*not valid JSON/m);
+});
+
+test('R5: the visible-price detector is linear on a pathological page ("$<" with no ">")', () => {
+  // The first v1.4 detector skipped tags with an unbounded <[^>]*> and took 61 s on 400 KB.
+  const t = sealed('slow');
+  t.write(t.read() + '<p>' + '$<'.repeat(100000) + '</p>\n');
+  const t0 = Date.now();
+  const r = t.run('--check', '--allow-unread');
+  assert.ok(Date.now() - t0 < 10000, `took ${Date.now() - t0} ms`);
+  assert.equal(r.error, undefined, String(r.error));
+});
