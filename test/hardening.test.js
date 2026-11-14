@@ -319,13 +319,16 @@ test('V2: a non-USD currency and an unknown schemaVersion are refused before any
   assert.equal(r.status, 1); assert.match(r.stderr, /schemaVersion 3 is not supported/);
 });
 
-test('V2: the price tie-break between twins is exact in cents', () => {
-  // Two "Soup" entries at 6.00 and 6.01; the page says $6.01 → resolves to the second.
+test('V2: twins that differ by one cent are NOT told apart by the price on the page (audit 2026-11-14 F1)', () => {
+  // Two "Soup" entries at 6.00 and 6.01 in one section; the page says $6.01. Until v1.5 the
+  // page price picked the second; the page price is the untrusted value, so this is refused.
   const cat = { schemaVersion: 2, currency: 'USD', menu: [{ name: 'L', items: [
     { id: 'SOUPA0000000000000000001', name: 'Soup', amountMinor: 600 },
     { id: 'SOUPB0000000000000000002', name: 'Soup', amountMinor: 601 }] }] };
-  const t = scratch('tie', { 'menu.html': `<h3 class="item-name">Soup</h3><div class="item-price">$6.01</div>\n` }, cat);
+  const page = `<h3 class="item-name">Soup</h3><div class="item-price">$6.01</div>\n`;
+  const t = scratch('tie', { 'menu.html': page }, cat);
   const r = t.run('--write');
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(t.read('menu.html'), /data-sq-item="SOUPB0000000000000000002">\$6\.01</);
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /ambiguous node "Soup" @ \$6\.01 .*never by the price on the page/);
+  assert.equal(t.read('menu.html'), page, 'nothing written');
 });
