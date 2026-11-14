@@ -44,14 +44,25 @@ Required approving reviews: 0 (single maintainer). The PR and CI are the gate, n
 
 ## What a passing run guarantees
 
-For every managed item (an anchored id, or a name that resolves to exactly one catalog
-record), on every `.html` file under `--site` (not reached through any symbolic link):
+For every managed item (an anchored id; or an unanchored name that maps to exactly one
+catalog record, or to exactly one within the section it sits in — never chosen by the price
+on the page), on every `.html` file under `--site` (not reached through any symbolic link):
 
 - the visible price, the JSON-LD offer's `price`, and the snapshot agree with the catalog;
 - the JSON-LD offer's `priceCurrency` is the catalog currency, and its `identifier` is the id;
 - every ld+json block parses (an unparseable one is refused, never skipped) and none has a
   duplicate key, so what a parser reads is what was checked;
-- no `priceCurrency` outside a managed offer can merge into it through a shared `@id`;
+- every ld+json block uses only plain schema.org terms: its `@context`, if any, is the string
+  `http(s)://schema.org` at the top of the block, no key is an IRI or prefixed name, and no
+  keyword outside `@context @type @id @graph @value @language @list @set` appears — so no
+  other spelling or alias of `price` can sit beside the one that was checked;
+- a managed MenuItem and its Offer carry no `@id`, so no other node can merge a second offer,
+  price, currency or identifier into them;
+- no managed price node or ld+json block sits inside an HTML comment, `<template>`,
+  `<noscript>`, `<textarea>`, `<title>`, `<style>`, `<xmp>`, `<iframe>`, `<noembed>`,
+  `<noframes>` or a non-JSON-LD `<script>` (found by a forward pattern scan; a hit is refused);
+- a visible anchor is exactly one lowercase `data-sq-item="…"`; any other casing or a second
+  copy is refused, so the id the baker read is the id a browser keeps;
 - every other JSON-LD price key (`price`, `lowPrice`, `highPrice`, `minPrice`, `maxPrice`)
   and every price-like text the detector recognizes outside JSON-LD has been reported
   (strict: refused).
@@ -68,10 +79,17 @@ record), on every `.html` file under `--site` (not reached through any symbolic 
 - **Items whose name is not in the catalog are left alone,** silently, on both surfaces.
 - **HTML is matched by pattern, not parsed.** The visible node must be the documented markup
   (attribute order matters; other forms are refused, not mis-priced). The ld+json script
-  boundary is found by pattern, with the `type` decoded as a browser decodes it; a block
-  inside an HTML comment is processed as if live. JSON-LD `@id` merging is accounted for
-  only for price and currency keys — not, for example, a second `identifier` merged onto an
-  item from another node.
+  boundary is found by pattern, with the `type` decoded as a browser decodes it. Inert
+  regions are found by a pattern scan too; content hidden by the `hidden` attribute, CSS, a
+  closed `<details>` or script is treated as live.
+- **An anchored id is trusted.** The baker prices an anchored node by its id and does not
+  compare the name shown beside it with the catalog name for that id. A row hand-anchored
+  to the wrong id shows that id's price under its own name, and every gate passes. The
+  snapshot records the catalog name per id; reviewing it against the page is manual.
+- **JSON-LD is not expanded.** The vocabulary rules above are a narrower contract than
+  JSON-LD: valid markup that uses a custom context, prefixed keys, or an `@id` on a managed
+  item is refused, not interpreted. A consumer that fetches a different schema.org context
+  than the published one is out of scope.
 - **Writes:** each file is replaced atomically; the set of files is not. Power loss after a
   rename may lose the directory entry. Two bakers on one tree are not coordinated. A
   directory swapped for a symbolic link *between* listing and writing is not detected. The

@@ -62,7 +62,7 @@ import {
   assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml,
   centsToText, textToCents, formatPrice,
 } from '../lib/guards.mjs';
-import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs } from '../lib/jsonld.mjs';
+import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs, assertPlainSchemaOrg, inertRanges, inertAt } from '../lib/jsonld.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_SRC      = path.join(ROOT, 'demo', 'catalog.json');
@@ -183,21 +183,26 @@ async function loadCatalog(src) {
 
 // Resolve an UNANCHORED node to a catalog record. Throws on ambiguity (fail-closed).
 // Returns null when the node is not an orderable catalog item (leave it alone).
+//
+// A name shared by several catalog items is resolved by the SECTION the node sits in, and by
+// nothing else. The price on the page is never used: it is the untrusted value this tool
+// exists to correct, and a row showing its twin's price (a copied row, a stale page) would
+// be given the twin's id — wrong, and then consistent on every surface (audit 2026-11-14 F1).
+// `price` is only quoted in the error.
 function resolveUnanchored(cat, name, price, section) {
   const cands = cat.byName.get(nkey(name));
   if (!cands) return null;                                     // not in catalog -> leave alone
   if (cands.length === 1) return cands[0];
-  const byPrice = cands.filter(c => c.price === price);      // integer cents: exact
-  if (byPrice.length === 1) return byPrice[0];                 // tie-break 1: the price on the page today
   if (section) {
     const exact = cat.sections.get(nkey(section));
     if (exact) {
       const bySec = cands.filter(c => c.cat === exact);
-      if (bySec.length === 1) return bySec[0];                 // tie-break 2: the section it sits in
+      if (bySec.length === 1) return bySec[0];                 // the section it sits in
     }
   }
-  die(`ambiguous node "${name}" @ $${money(price)} (section=${section || '?'}) — ${cands.length} candidates: `
-    + cands.map(c => `${c.cat}/$${money(c.price)}`).join(', '));
+  die(`ambiguous node "${name}" @ $${Number.isFinite(price) ? money(price) : '?'} (section=${section || '?'}) — ${cands.length} candidates: `
+    + cands.map(c => `${c.cat}/$${money(c.price)}`).join(', ')
+    + ' — a shared name is resolved by section, never by the price on the page; add the id by hand (data-sq-item="…" / "identifier")');
 }
 
 // Look up an anchored id; fail-closed if the catalog no longer has it.
@@ -214,16 +219,21 @@ function priceForId(cat, id, where) {
 // preserving the surrounding markup byte-for-byte when nothing needs to change. A price
 // written with a thousands separator ($1,000.00) is read, and written back with one.
 const RE_VISIBLE = /(<h2 class="cat-title">([^<]+)<\/h2>)|((<h3 class="item-name"[^>]*>([^<]+)<\/h3>)(\s*)<div class="item-price"([^>]*)>\$([0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}|[0-9]+\.[0-9]{2})<\/div>)/g;
-function tVisible(html, cat, seen) {
+function tVisible(html, cat, seen, f, inert) {
   let section = null;
-  return html.replace(RE_VISIBLE, (m, h2, secName, _blk, h3, name, gap, attrs, price) => {
-    if (h2) { section = secName.trim(); return m; }
+  return html.replace(RE_VISIBLE, (m, h2, secName, _blk, h3, name, gap, attrs, price, offset) => {
+    const where = inertAt(inert, offset);
+    if (h2) { if (!where) section = secName.trim(); return m; }
+    // A price node inside a comment, <template>, … is not published content: baking and
+    // counting it would let an inert copy of the menu stand in for the live one (F5).
+    if (where) die(`${f}:${lineAt(html, offset)}: price node "${name}" is inside ${where.kind} — a browser does not render it; remove it or make it live`);
     const cur = textToCents(price);
-    const anchors = attrs.match(/data-sq-item\b/g) || [];
+    const anchors = attrs.match(/data-sq-item\b/gi) || [];     // attribute names are case-insensitive (F3)
     const exact = attrs.match(/data-sq-item="([^"]*)"/g) || [];
     // A node that carries data-sq-item in a form other than exactly data-sq-item="…" (single
     // quotes, unquoted, or twice) would end up with two anchors, and the browser keeps the
-    // FIRST — not the one this run wrote. Refuse rather than emit it.
+    // FIRST — not the one this run wrote. The count is case-insensitive (DATA-SQ-ITEM is the
+    // same attribute to a browser); the accepted form is lowercase only. Refuse rather than emit it.
     if (anchors.length !== exact.length || anchors.length > 1) {
       die(`visible "${name}": data-sq-item must appear exactly once as data-sq-item="…" (got: ${attrs.trim()})`);
     }
@@ -262,6 +272,11 @@ const lineAt = (s, idx) => s.slice(0, idx).split('\n').length;
 
 function tJsonLd(html, f, cat, seen, unreadLines) {
   const blocks = ldBlocks(html);
+  const inert = inertRanges(html);
+  for (const b of blocks) {
+    const where = inertAt(inert, b.outerStart);
+    if (where) die(`${f}:${lineAt(html, b.outerStart)}: an ld+json block is inside ${where.kind} — a browser does not render it; remove it or make it live`);
+  }
   // MenuItem text outside any ld+json block is not structured data: refuse to bake it.
   RE_MENUITEM_TEXT.lastIndex = 0;
   let mt;
@@ -283,10 +298,17 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
       // can be \u-escaped past any text hint, and other parsers may be more lenient (R2).
       die(`${f}${at}: a JSON-LD block ${looksLikeMenuItem(b.text) ? 'containing MenuItem ' : ''}is not valid JSON (${e.message.replace(/ at offset \d+$/, '')}) — fix or remove it`);
     }
+    // Only plain schema.org terms under the schema.org context are read (F2): any other
+    // spelling of a key could name the same property as one this run checks.
+    try { assertPlainSchemaOrg(tree); }
+    catch (e) { die(`${f}:${lineAt(html, b.start + e.offset)}: ${e.message.replace(/ at offset \d+$/, '')} — refusing to bake this block`); }
     const owned = new Set();                                     // keyStart of price keys this run reads
     const ownSubtree = node => { for (const { node: o } of objects(node)) for (const m of o.members) if (PRICE_FACT_KEYS.has(m.key)) owned.add(m.keyStart); };
-    for (const { node: item } of objects(tree)) {
+    for (const { node: item, ancestors } of objects(tree)) {
       if (!hasType(item, 'MenuItem')) continue;
+      // The section a JSON-LD item sits in: its nearest enclosing MenuSection's name.
+      const secNode = [...ancestors].reverse().find(a => hasType(a, 'MenuSection'));
+      const secName = secNode && secNode.get('name') && secNode.get('name').kind === 'string' ? secNode.get('name').value : null;
       const nameNode = item.get('name');
       const name = nameNode && nameNode.kind === 'string' ? nameNode.value : null;
       const idNode = item.get('identifier');
@@ -296,10 +318,17 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
       if (id && isId(id)) rec = { id, price: priceForId(cat, id, `JSON-LD "${name}"`) };
       else {
         const cur = off.price ? textToCents(off.price.value) : NaN;
-        rec = name ? resolveUnanchored(cat, name, cur, null) : null;   // JSON-LD has no section; price tie-break
+        rec = name ? resolveUnanchored(cat, name, cur, secName) : null;   // same section-only rule as the visible side
         if (!rec) { ownSubtree(item); continue; }                // not a catalog item: leave alone
       }
       if (!off.offer) die(`${f}: JSON-LD MenuItem "${name}" (${rec.id}) ${off.why} — a managed item needs exactly one Offer with a "price" string; refusing to bake it`);
+      // JSON-LD merges every node that shares an "@id". A managed item or offer that carries
+      // one can be given a second "offers" (or anything else) by a node elsewhere on the page,
+      // and IRIs can be spelled relative or absolute, so matching ids is not reliable. Without
+      // an "@id" the node is anonymous and nothing can merge into it (F4).
+      for (const [n, what] of [[item, 'MenuItem'], [off.offer, 'Offer']]) {
+        if (n.get('@id')) die(`${f}:${lineAt(html, b.start + n.members.find(m => m.key === '@id').keyStart)}: managed ${what} "${name}" (${rec.id}) must not carry "@id" — another node sharing it would merge into this one; remove the "@id"`);
+      }
       seen.add(rec.id);
       owned.add(off.offer.members.find(m => m.key === 'price').keyStart);
       const abs = n => ({ start: b.start + n.start, end: b.start + n.end });
@@ -389,7 +418,7 @@ let unread = 0;
 for (const f of htmlFiles) {
   const p = path.join(SITE, f);
   const before = fs.readFileSync(p, 'utf8');
-  let after = tVisible(before, cat, seen);
+  let after = tVisible(before, cat, seen, f, inertRanges(before));
   const ldUnread = [];
   after = tJsonLd(after, f, cat, seen, ldUnread);
   for (const line of [...new Set([...ldUnread, ...unreadPrices(after)])].sort((a, b) => a - b)) {
