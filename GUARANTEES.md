@@ -35,7 +35,9 @@ Required approving reviews: 0 (single maintainer). The PR and CI are the gate, n
 - **Other branches and tags** are not gated. They are not a release channel here; do not
   point consumers at them.
 - **Your own site's deploy.** CI proves the *demo* tree. A site that uses pricelock is only
-  gated if its own pipeline runs `--check` and the parity test and blocks publishing on them.
+  gated if its own pipeline runs `bake-prices --check` and `bin/check-parity.mjs` against its
+  own paths and blocks publishing on both. `check-parity` has no default paths and prints
+  the tree it verified, so a pass on the demo cannot be read as a pass on another site.
   Deploying a tree by any other route (an upload, a CMS, a hotfix) skips both.
 - **`--allow-unread`** downgrades unread price-like markup, and priced rows the catalog does
   not know, to a warning. CI never passes it.
@@ -88,8 +90,10 @@ on the page), on every `.html` file under `--site` (not reached through any symb
   and refused (strict), on either surface; one with no price is left alone silently. Under
   `--allow-unread` both are left as they are, so the two surfaces of such an item may disagree.
 - **`--allow-unread` is all-or-nothing.** There is no per-item exemption list.
-- **Parity is site-wide, not per page.** An id needs a visible node and a JSON-LD entry
-  somewhere under `--site`; they may be on different pages.
+- **The demo's parity test is site-wide.** `test/parity.test.js` asks for a visible node and a
+  JSON-LD entry somewhere under the demo site. `bin/check-parity.mjs` is per page by default
+  (the ids a page shows are the ids its JSON-LD describes); `--site-wide` turns that off.
+  Neither checks unanchored prices or the catalog — that is `bake-prices --check`.
 - **HTML is matched by pattern, not parsed.** The visible node must be the documented markup
   (attribute order matters; other forms are refused, not mis-priced). The ld+json script
   boundary is found by pattern, with the `type` decoded as a browser decodes it. Inert
