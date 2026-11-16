@@ -59,7 +59,7 @@ import { fileURLToPath } from 'node:url';
 import {
   validateFeedId, validateFeedPrice, validateAmountMinor, validateCurrency, dollarsToCents,
   flagValue, UsageError, isUrlSource, checkSourceUrl, snapshotSource,
-  assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml,
+  assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml, assertSnapshotTarget,
   centsToText, textToCents, formatPrice,
 } from '../lib/guards.mjs';
 import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs, assertPlainSchemaOrg, inertRanges, inertAt } from '../lib/jsonld.mjs';
@@ -219,7 +219,7 @@ function priceForId(cat, id, where) {
 // preserving the surrounding markup byte-for-byte when nothing needs to change. A price
 // written with a thousands separator ($1,000.00) is read, and written back with one.
 const RE_VISIBLE = /(<h2 class="cat-title">([^<]+)<\/h2>)|((<h3 class="item-name"[^>]*>([^<]+)<\/h3>)(\s*)<div class="item-price"([^>]*)>\$([0-9]{1,3}(?:,[0-9]{3})+\.[0-9]{2}|[0-9]+\.[0-9]{2})<\/div>)/g;
-function tVisible(html, cat, seen, f, inert) {
+function tVisible(html, cat, seen, f, inert, unknown) {
   let section = null;
   return html.replace(RE_VISIBLE, (m, h2, secName, _blk, h3, name, gap, attrs, price, offset) => {
     const where = inertAt(inert, offset);
@@ -242,7 +242,12 @@ function tVisible(html, cat, seen, f, inert) {
     if (id && isId(id)) { rec = { id, price: priceForId(cat, id, `visible "${name}"`) }; }
     else {
       rec = resolveUnanchored(cat, name, cur, section);
-      if (!rec) return m;                                      // leave-alone node
+      if (!rec) {
+        // Not a priced catalog item: left byte-identical, but it IS a price in the menu's
+        // own markup that nothing verifies — reported, and refused unless --allow-unread (G4).
+        unknown.push({ line: lineAt(html, offset), what: `visible "${name.trim()}"` });
+        return m;
+      }
     }
     seen.add(rec.id);
     const newAttrs = /data-sq-item="/.test(attrs)
@@ -270,7 +275,7 @@ function tVisible(html, cat, seen, f, inert) {
 const RE_MENUITEM_TEXT = /"@type"\s*:\s*"(?:[^"]*[/:#])?MenuItem"/g;
 const lineAt = (s, idx) => s.slice(0, idx).split('\n').length;
 
-function tJsonLd(html, f, cat, seen, unreadLines) {
+function tJsonLd(html, f, cat, seen, unreadLines, unknown) {
   const blocks = ldBlocks(html);
   const inert = inertRanges(html);
   for (const b of blocks) {
@@ -319,7 +324,15 @@ function tJsonLd(html, f, cat, seen, unreadLines) {
       else {
         const cur = off.price ? textToCents(off.price.value) : NaN;
         rec = name ? resolveUnanchored(cat, name, cur, secName) : null;   // same section-only rule as the visible side
-        if (!rec) { ownSubtree(item); continue; }                // not a catalog item: leave alone
+        if (!rec) {
+          // Not a priced catalog item: left alone. If it carries a price, that price is
+          // unverified — reported by name here (so not again as a bare line), and refused
+          // unless --allow-unread (G4). An item with no price has nothing to verify.
+          ownSubtree(item);
+          const priced = [...objects(item)].some(({ node: o }) => o.members.some(m => PRICE_KEYS.has(m.key)));
+          if (priced) unknown.push({ line: lineAt(html, b.start + item.start), what: `JSON-LD MenuItem ${name === null ? '(no name)' : JSON.stringify(name)}` });
+          continue;
+        }
       }
       if (!off.offer) die(`${f}: JSON-LD MenuItem "${name}" (${rec.id}) ${off.why} — a managed item needs exactly one Offer with a "price" string; refusing to bake it`);
       // JSON-LD merges every node that shares an "@id". A managed item or offer that carries
@@ -411,6 +424,9 @@ const seen = new Set();
 let htmlFiles;
 try { htmlFiles = listHtml(SITE); } catch (e) { die(`--site ${SITE}: ${e.message}`); }
 if (htmlFiles.length === 0) die(`no .html files found in site dir: ${SITE}`);
+// Before anything is baked or written: the snapshot must not land on an input (G1).
+try { assertSnapshotTarget(SNAPSHOT, { src: isUrlSource(SRC) ? null : SRC, site: SITE, pages: htmlFiles }); }
+catch (e) { if (e instanceof UsageError) usage(e.message); throw e; }
 
 // Bake every file in memory first; a die() part-way leaves every file untouched.
 const pending = [];
@@ -418,16 +434,21 @@ let unread = 0;
 for (const f of htmlFiles) {
   const p = path.join(SITE, f);
   const before = fs.readFileSync(p, 'utf8');
-  let after = tVisible(before, cat, seen, f, inertRanges(before));
+  const unknown = [];   // priced menu rows / MenuItems the catalog does not price (G4)
+  let after = tVisible(before, cat, seen, f, inertRanges(before), unknown);
   const ldUnread = [];
-  after = tJsonLd(after, f, cat, seen, ldUnread);
+  after = tJsonLd(after, f, cat, seen, ldUnread, unknown);
+  for (const u of unknown) {
+    unread++;
+    console.error(`bake-prices ${STRICT ? 'FAIL' : 'WARN'}: ${f}:${u.line}: ${u.what} has a price but is not in the catalog as a priced item — ${STRICT ? 'refused' : 'left as is (--allow-unread)'}`);
+  }
   for (const line of [...new Set([...ldUnread, ...unreadPrices(after)])].sort((a, b) => a - b)) {
     unread++;
     console.error(`bake-prices ${STRICT ? 'FAIL' : 'WARN'}: ${f}:${line}: price-like markup the baker cannot read — ${STRICT ? 'refused' : 'left as is (--allow-unread)'}`);
   }
   if (after !== before) pending.push({ f, p, after });
 }
-if (STRICT && unread) die(`${unread} price-like node(s) the baker cannot read; nothing written. Anchor them, or pass --allow-unread to leave them as is.`);
+if (STRICT && unread) die(`${unread} price-like node(s) the baker cannot read or the catalog does not price; nothing written. Anchor them, add them to the catalog, or pass --allow-unread to leave them as is.`);
 const changedFiles = pending.map(x => x.f);
 
 // snapshot (v2): sorted { id: { name, amountMinor } } — input to the offline consistency check
