@@ -1,11 +1,12 @@
 {
   "name": "pricelock",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Reference implementation: write catalog prices into a static site's HTML, keyed by catalog item id, with a committed snapshot and an offline three-way consistency check.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "bake-prices": "bin/bake-prices.mjs"
+    "bake-prices": "bin/bake-prices.mjs",
+    "check-parity": "bin/check-parity.mjs"
   },
   "scripts": {
     "bake": "node bin/bake-prices.mjs --write",

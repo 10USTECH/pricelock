@@ -90,7 +90,7 @@ Every check below stops the run before a single file is written (exit 1, named c
 - **Catalog shape.** Only the simplified feed shape below is read (v2 with integer `amountMinor`, or the older v1 with float `price`). Not a vendor's response — that is what an adapter is for. Prices are integer cents inside the baker; a v1 float is converted once, at load, after being checked for whole cents. Only `USD` is formatted; a v2 feed declaring another currency is refused.
 - **Price-node matching covers the demo markup only.** A visible price is found only as `<h3 class="item-name">Name</h3>` directly followed by `<div class="item-price">$N.NN</div>`, with sections taken from `<h2 class="cat-title">`. Attribute order matters there: `data-sq-item` before `class` is not matched (it is refused as unreadable, not mis-priced). An ld+json block is any `<script>` whose first `type` attribute, decoded and trimmed as a browser does (`application/ld&#x2B;json; charset=utf-8` counts), is `application/ld+json`. JSON-LD is any `MenuItem` (`"@type"` of `MenuItem`, `schema:MenuItem` or the full IRI) in a parsed ld+json block, with one `Offer` whose `price` is a string with two decimals. Other markup is not read; it stops the run unless `--allow-unread` is passed, in which case it is reported as a `WARN` with file and line and left as is. Only `.html` files are read (not `.htm`).
 - **Unknown names are not priced.** An unanchored row whose name is not a priced catalog item is left byte-identical. If it shows a price it is reported by name and stops the run (since v1.6; `--allow-unread` downgrades it to a `WARN`); with no price it is left alone silently. Names are compared after whitespace/case folding only; an HTML entity in the page (`&amp;`) does not match the raw character in the feed, so such a row stays unanchored until an id is added by hand.
-- **The consistency check covers anchored nodes only.** A price node without `data-sq-item` / `"identifier"` is not checked (the baker's default refuses such nodes before they are committed). For every identified JSON-LD offer it checks price **and** currency against the snapshot; an identified item with no readable single offer fails the check. Every snapshot id must have both a visible node and a JSON-LD entry somewhere on the site; the check does not verify that the name next to an id matches the catalog name — ids, not names, are the key.
+- **The consistency check covers anchored nodes only.** A price node without `data-sq-item` / `"identifier"` is not checked (the baker's default refuses such nodes before they are committed). For every identified JSON-LD offer it checks price **and** currency against the snapshot; an identified item with no readable single offer fails the check. Every snapshot id must have both a visible node and a JSON-LD entry somewhere on the site (`bin/check-parity.mjs` also requires them on the same page, unless `--site-wide`; the demo's own `test/parity.test.js` is site-wide and the demo is one page); the check does not verify that the name next to an id matches the catalog name — ids, not names, are the key.
 - **Formats.** Dollar sign and exactly two decimals; one currency, `USD` — written into each managed offer's `priceCurrency`. A visible price with a thousands separator (`$1,000.00`) is read, and written back with one; JSON-LD prices are written without separators (`"1000.00"`).
 - **Fetching.** `--src` accepts an `https:` URL only, with no `user:password@` part, and fetches it with no authentication, a 15-second idle timeout, a 30-second overall deadline, and an 8 MiB response ceiling. The host must resolve only to public addresses — loopback, RFC 1918, carrier-NAT, link-local, multicast, reserved, documentation and benchmarking ranges are refused, IPv6 forms that embed an IPv4 address are judged by that address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::`, 6to4 `2002::`), and any other IPv6 address must be global unicast (`2000::/3`) outside Teredo, benchmarking, ORCHID and documentation ranges — so SIIT `::ffff:0:…`, NAT64 local-use `64:ff9b:1::`, site-local `fec0::` and the like are refused — checked before the fetch and again when the connection opens. Redirects are refused: point `--src` at the final URL. A real POS API that needs a token is out of scope for this repo.
 - **Snapshot provenance.** The snapshot (v2) records the source path (for a URL, origin and path only: no query string, fragment or credentials), the feed's `cachedAt`, `locationId` and `currency`, and integer `amountMinor` per id — not who ran the baker or when.
@@ -120,6 +120,8 @@ What that does **not** give you:
 | Path | What it is |
 |---|---|
 | `bin/bake-prices.mjs` | The baker. `--check` (no write) / `--write` (rewrite in place); `--allow-unread` to tolerate price-like markup it cannot read. |
+| `bin/check-parity.mjs` | The offline consistency check for **your** site and snapshot: `--site <dir> --snapshot <file>` (both required), per-page by default, `--site-wide` to relax. Read-only. |
+| `lib/parity.mjs` | The check behind it, as a function (`checkParity`). |
 | `bin/square-to-feed.mjs` | The Square adapter: one location's catalog → v2 feed. Token from env; `--input` for offline runs. |
 | `lib/square.mjs` | The pure Square-objects → feed transform behind the adapter. |
 | `lib/guards.mjs` | The input checks the baker runs first: feed-id and feed-price shape, flag values, `https:`-only sources, public-address checks before the fetch and at connect time, no redirects, bounded response body, atomic file replacement, symlink refusal. |
@@ -136,6 +138,7 @@ What that does **not** give you:
 | `test/adversarial.test.js` | Regression tests from the 2026-10-30 adversarial audit (`docs/AUDIT-2026-10-30.md`): each reproduced a wrong or unchecked price that passed both gates, a write outside `--site`, or a refusal of valid markup. |
 | `test/audit-2026-11-14.test.js` | Regression tests from the 2026-11-14 correctness audit (`docs/AUDIT-2026-11-14.md`): identity taken from the page price, IRI/prefixed/aliased price keys, mixed-case duplicate anchors, `@id` merging, and markup inside comments or `<template>`. |
 | `test/audit-2026-11-16.test.js` | Regression tests from the 2026-11-16 audit (`docs/AUDIT-2026-11-16.md`): a snapshot path that lands on an input, Square's location-availability default, types from another vocabulary, and priced rows the catalog does not know. |
+| `test/check-parity.test.js` | The parity runner: no default paths, a green demo beside a failing consumer site, stale prices and currency, ids missing on either side, page-level pairing and `--site-wide`, unreadable inputs. |
 | `test/square.test.js` | The Square adapter on a recorded-shape fixture: twins, location overrides, variations, variable pricing, skips, refusals, and an end-to-end bake. |
 | `docs/AUDIT-2026-10.md` | The first audit record: what was checked, what was reproduced, what was changed, what remains. |
 | `docs/AUDIT-2026-10-30.md` | The second (adversarial) audit record, against v1.3.0. |
@@ -150,6 +153,17 @@ Point `--src` at any catalog in the same shape — a file, or an `https:` URL th
 ```bash
 node bin/bake-prices.mjs --write --src ./my-catalog.json --site ./public --snapshot ./public/prices.snapshot.json
 ```
+
+### Gating your own site
+
+`node --test` in this repo proves the **demo** tree. To gate a site of your own, run both checks against your paths in its pipeline, and block publishing on either:
+
+```bash
+node bin/bake-prices.mjs --check --src ./my-catalog.json --site ./public --snapshot ./public/prices.snapshot.json
+node bin/check-parity.mjs --site ./public --snapshot ./public/prices.snapshot.json
+```
+
+`check-parity` (since v1.7) is the offline consistency check as a command: visible price == JSON-LD price and currency == snapshot for every id, every snapshot id on both surfaces, and — per page — the ids a page shows are exactly the ids its JSON-LD describes. It has **no default paths** (naming nothing is exit 2) and prints the real site and snapshot paths it verified, so a CI log shows which tree a pass belongs to. An item need not be on every page. `--site-wide` drops the per-page rule only, for a site that keeps its menu markup on one page and shows prices on another. It reads only, and it does not replace `--check`: only the baker ties the tree to the catalog.
 
 There is deliberately **no** `.env`, no secret, and no real catalog anywhere in this repo. Keep it that way: commit prices, never keys.
 
