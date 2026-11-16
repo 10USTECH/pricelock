@@ -182,13 +182,16 @@ test('G3: a foreign "@type" inside an array of types is refused too', () => {
   const page = anchored + LD(`{${ctx},"@graph":[{"@type":["Thing","https://unrelated.example/MenuItem"],"name":"Pasta","identifier":"${ID}","offers":{"@type":"Offer","price":"13.00","priceCurrency":"USD"}},${ldSoup}]}`);
   refused('g3-type-array', page, /"@type"/);
 });
-test('G3: a block that holds a MenuItem but no "@context" is refused by the baker and the parity extractor', () => {
+// G3b (not changed, held for an owner ruling): a block with no "@context" is still read.
+// Requiring one was drafted and withdrawn — it reverses a decision merged on 2026-11-14
+// ("no @context at all still bake"), and the prices in such a block are checked all the same.
+// This control pins the current behaviour so a change to it is deliberate.
+test('G3b control: a block with no "@context" is still baked and still checked', () => {
   const page = anchored + LD(`{"@graph":[${ldPasta()},${ldSoup}]}`);
-  refused('g3-noctx', page, /"@context"/);
-  assert.throws(() => jsonLdPrices(page), /"@context"/);
-  // an array at the top: EACH top-level object that holds a MenuItem needs its own context
-  const arr = anchored + LD(`[{${ctx},"@graph":[${ldPasta()}]},{"@graph":[${ldSoup}]}]`);
-  refused('g3-noctx-array', arr, /"@context"/);
+  assert.equal(bakes('g3-noctx', page).read(), page);
+  const stale = page.replace('"price":"13.00"', '"price":"1.00"');
+  const t = tree('g3-noctx-stale', stale);
+  assert.equal(t.run('--check').status, 1, 'a stale price in a context-less block still fails --check');
 });
 test('G3 control: every supported schema.org spelling of the type and the context still bakes byte-identically', () => {
   for (const type of ['MenuItem', 'schema:MenuItem', 'https://schema.org/MenuItem', 'http://schema.org/MenuItem']) {

@@ -37,7 +37,8 @@ Required approving reviews: 0 (single maintainer). The PR and CI are the gate, n
 - **Your own site's deploy.** CI proves the *demo* tree. A site that uses pricelock is only
   gated if its own pipeline runs `--check` and the parity test and blocks publishing on them.
   Deploying a tree by any other route (an upload, a CMS, a hotfix) skips both.
-- **`--allow-unread`** downgrades unread price-like markup to a warning. CI never passes it.
+- **`--allow-unread`** downgrades unread price-like markup, and priced rows the catalog does
+  not know, to a warning. CI never passes it.
 - **Resealing.** The parity check is a consistency check, not a seal: whoever can edit the
   catalog file can run `--write` and every surface will agree on the new number. Only
   `--check` against the real catalog ties the site to the source.
@@ -63,6 +64,13 @@ on the page), on every `.html` file under `--site` (not reached through any symb
   `<noframes>` or a non-JSON-LD `<script>` (found by a forward pattern scan; a hit is refused);
 - a visible anchor is exactly one lowercase `data-sq-item="…"`; any other casing or a second
   copy is refused, so the id the baker read is the id a browser keeps;
+- every node `@type` in every ld+json block is a schema.org type (`Term`, `schema:Term` or
+  `http(s)://schema.org/Term`), so a managed MenuItem or Offer is schema.org's, not a
+  same-named type from another vocabulary; a block with no `@context` is still read;
+- every priced row in the menu's own markup, and every priced JSON-LD MenuItem, is either a
+  managed item or has been reported (strict: refused) — an unknown name is not a way past;
+- `--snapshot` is not, and does not resolve to, the catalog file or a page (checked at
+  start-up, by real path and by device+inode);
 - every other JSON-LD price key (`price`, `lowPrice`, `highPrice`, `minPrice`, `maxPrice`)
   and every price-like text the detector recognizes outside JSON-LD has been reported
   (strict: refused).
@@ -76,7 +84,12 @@ on the page), on every `.html` file under `--site` (not reached through any symb
   price properties, and Open Graph `product:price:amount`. It does not see a price in an
   image, in CSS `content`, rendered by script, spelled out, written after the number
   (`1.00 $`), or without a currency sign.
-- **Items whose name is not in the catalog are left alone,** silently, on both surfaces.
+- **Items whose name is not in the catalog are not priced.** One that shows a price is reported
+  and refused (strict), on either surface; one with no price is left alone silently. Under
+  `--allow-unread` both are left as they are, so the two surfaces of such an item may disagree.
+- **`--allow-unread` is all-or-nothing.** There is no per-item exemption list.
+- **Parity is site-wide, not per page.** An id needs a visible node and a JSON-LD entry
+  somewhere under `--site`; they may be on different pages.
 - **HTML is matched by pattern, not parsed.** The visible node must be the documented markup
   (attribute order matters; other forms are refused, not mis-priced). The ld+json script
   boundary is found by pattern, with the `type` decoded as a browser decodes it. Inert
