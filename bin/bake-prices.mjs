@@ -46,6 +46,7 @@
 //   node bin/bake-prices.mjs --check --src <file|url># read the catalog from a file or https: URL
 //   node bin/bake-prices.mjs --write --site <dir> --snapshot <file>
 //   node bin/bake-prices.mjs --check --allow-unread  # downgrade unread price-like markup to a WARN
+//   node bin/bake-prices.mjs --check --location <id> # refuse a catalog whose locationId is not <id>
 //
 //   Defaults are the bundled demo, so a bare `--check` / `--write` runs credential-free with
 //   no arguments and no network. Point --src at your own catalog to use it for real.
@@ -57,12 +58,12 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
-  validateFeedId, validateFeedPrice, validateAmountMinor, validateCurrency, dollarsToCents,
+  validateFeedId, validateFeedPrice, validateAmountMinor, validateCurrency, validateTimestamp, dollarsToCents,
   flagValue, UsageError, isUrlSource, checkSourceUrl, snapshotSource,
   assertPublicHost, guardedLookup, responseError, readBodyBounded, writeFileAtomic, listHtml, assertSnapshotTarget,
   centsToText, textToCents, formatPrice,
 } from '../lib/guards.mjs';
-import { parseStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs, assertPlainSchemaOrg, inertRanges, inertAt } from '../lib/jsonld.mjs';
+import { parseStrict, parseJsonStrict, objects, hasType, singleOffer, ldBlocks, PRICE_KEYS, PRICE_FACT_KEYS, looksLikeMenuItem, decodeCharRefs, assertPlainSchemaOrg, inertRanges, inertAt } from '../lib/jsonld.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_SRC      = path.join(ROOT, 'demo', 'catalog.json');
@@ -81,8 +82,9 @@ const MODE_WRITE = has('--write');
 // (--strict is accepted for compatibility; it is the default.)
 const STRICT     = !has('--allow-unread');
 if (MODE_CHECK === MODE_WRITE) usage('pass exactly one of --check (no write) or --write. See the header.');
-let SRC, SITE, SNAPSHOT;
+let SRC, SITE, SNAPSHOT, LOCATION;
 try {
+  LOCATION = flagValue(args, '--location', null);
   SRC      = flagValue(args, '--src', DEFAULT_SRC);
   SITE     = flagValue(args, '--site', DEFAULT_SITE);
   SNAPSHOT = flagValue(args, '--snapshot', DEFAULT_SNAPSHOT);
@@ -108,7 +110,7 @@ function fetchJson(u) {
       const err = responseError(res.statusCode, res.headers.location);
       if (err) { res.resume(); return reject(err); }
       readBodyBounded(res).then(text => {
-        try { resolve(JSON.parse(text)); }
+        try { resolve(parseJsonStrict(text)); }
         catch (e) { reject(new Error(`catalog is not valid JSON: ${e.message}`)); }
       }, reject);
     });
@@ -137,20 +139,38 @@ async function loadCatalog(src) {
     label = src === DEFAULT_SRC ? 'demo/catalog.json' : src;
     let text;
     try { text = fs.readFileSync(src, 'utf8'); } catch (e) { die(`cannot read --src ${src}: ${e.message}`); }
-    try { raw = JSON.parse(text); } catch (e) { die(`catalog is not valid JSON (${label}): ${e.message}`); }
+    // Strict, like every JSON input: a repeated key ("amountMinor" twice) is refused, never
+    // resolved last-wins (audit 2026-11-24 H4).
+    try { raw = parseJsonStrict(text); } catch (e) { die(`catalog is not valid JSON (${label}): ${e.message}`); }
   }
   if (!raw || !Array.isArray(raw.menu) || raw.menu.length === 0) die('catalog empty or malformed (no menu[])');
   const v = raw.schemaVersion === undefined ? 1 : raw.schemaVersion;
   if (v !== 1 && v !== 2) die(`catalog schemaVersion ${JSON.stringify(raw.schemaVersion)} is not supported (1 or 2)`);
   let currency = 'USD';
   if (v === 2) { try { currency = validateCurrency(raw.currency); } catch (e) { die(e.message); } }
-  const locationId = v === 2 && typeof raw.locationId === 'string' ? raw.locationId : null;
+  const locationId = v === 2 && typeof raw.locationId === 'string' && raw.locationId ? raw.locationId : null;
+  // --location: the location THIS SITE is for, stated by whoever runs the baker. The feed's
+  // own locationId is a claim made by the feed; without this it was copied into the snapshot
+  // and compared with nothing, so a feed for another location baked cleanly (audit
+  // 2026-11-24 H2). A catalog that states no location cannot satisfy the flag.
+  if (LOCATION !== null) {
+    if (locationId === null) die(`--location ${LOCATION}: the catalog (${label}) states no location (needs schemaVersion 2 with a "locationId" string) — refusing to assume it is the right one`);
+    if (locationId !== LOCATION) die(`catalog location mismatch: the catalog (${label}) is for location ${JSON.stringify(locationId).slice(0, 80)}, this site expects --location ${LOCATION} — nothing written`);
+  }
+  // fetchedAt: when the adapter fetched the catalog (cachedAt is when the catalog last
+  // changed). Reported, never verified, and kept out of the snapshot. It is printed, so its
+  // shape is checked: a UTC ISO-8601 timestamp or nothing (audit 2026-11-24 H5).
+  let fetchedAt = null;
+  if (raw.fetchedAt !== undefined && raw.fetchedAt !== null) {
+    try { fetchedAt = validateTimestamp(raw.fetchedAt, 'fetchedAt'); } catch (e) { die(e.message); }
+  }
 
-  const byId = new Map();       // id -> { id, name, price (integer cents), cat }
+  const byId = new Map();       // id -> { id, name, price (integer cents), cat, cats }
   const byName = new Map();     // nkey(name) -> [ rec, ... ]
-  const sections = new Map();   // lower(section) -> exact section name (for the section tie-break)
   for (const cat of raw.menu) {
-    if (cat && cat.name) sections.set(nkey(cat.name), cat.name);
+    // The section key used by the tie-break: case- and spacing-insensitive, so "Lunch" and
+    // "lunch " are one section (a page heading cannot tell them apart either).
+    const secKey = cat && typeof cat.name === 'string' && cat.name.trim() ? nkey(cat.name) : null;
     for (const it of (cat.items || [])) {
       const amountField = v === 2 ? it.amountMinor : it.price;
       if (typeof amountField !== 'number' || !it.id) continue;   // variable-priced / malformed -> skip
@@ -159,26 +179,30 @@ async function loadCatalog(src) {
         validateFeedId(it.id, it.name);
         cents = v === 2 ? validateAmountMinor(it.amountMinor, it.id) : dollarsToCents(validateFeedPrice(it.price, it.id));
       } catch (e) { die(e.message); }
-      const rec = { id: it.id, name: it.name, price: cents, cat: cat.name };
+      const rec = { id: it.id, name: it.name, price: cents, cat: cat.name, cats: new Map() };   // cats: secKey -> section name as written
       // One id, one price. The same id listed twice with identical name+price (an item
-      // shown under two sections) is one record; the same id with a different price or
-      // name is a feed defect — last-wins would bake one price into the HTML and write the
-      // other into the snapshot, so refuse it.
+      // shown under two sections) is one record that sits in BOTH sections; the same id
+      // with a different price or name is a feed defect — last-wins would bake one price
+      // into the HTML and write the other into the snapshot, so refuse it.
+      // Every section is kept (audit 2026-11-24 H1): keeping only the first let a name that
+      // two ids share inside a later section resolve to the other id, silently.
       const prev = byId.get(it.id);
       if (prev) {
         if (prev.price !== rec.price || nkey(prev.name) !== nkey(rec.name)) {
           die(`feed id ${it.id} appears more than once with different data: `
             + `"${prev.name}" $${money(prev.price)} (${prev.cat}) vs "${rec.name}" $${money(rec.price)} (${rec.cat})`);
         }
+        if (secKey !== null && !prev.cats.has(secKey)) prev.cats.set(secKey, cat.name);
         continue;
       }
+      if (secKey !== null) rec.cats.set(secKey, cat.name);
       byId.set(it.id, rec);
       const k = nkey(it.name);
       if (!byName.has(k)) byName.set(k, []);
       byName.get(k).push(rec);
     }
   }
-  return { byId, byName, sections, cachedAt: raw.cachedAt || null, label, currency, locationId, schemaVersion: v };
+  return { byId, byName, cachedAt: raw.cachedAt || null, fetchedAt, label, currency, locationId, schemaVersion: v };
 }
 
 // Resolve an UNANCHORED node to a catalog record. Throws on ambiguity (fail-closed).
@@ -194,14 +218,11 @@ function resolveUnanchored(cat, name, price, section) {
   if (!cands) return null;                                     // not in catalog -> leave alone
   if (cands.length === 1) return cands[0];
   if (section) {
-    const exact = cat.sections.get(nkey(section));
-    if (exact) {
-      const bySec = cands.filter(c => c.cat === exact);
-      if (bySec.length === 1) return bySec[0];                 // the section it sits in
-    }
+    const bySec = cands.filter(c => c.cats.has(nkey(section)));  // every section an id is listed under counts
+    if (bySec.length === 1) return bySec[0];                   // the only candidate in the section it sits in
   }
   die(`ambiguous node "${name}" @ $${Number.isFinite(price) ? money(price) : '?'} (section=${section || '?'}) — ${cands.length} candidates: `
-    + cands.map(c => `${c.cat}/$${money(c.price)}`).join(', ')
+    + cands.map(c => `${[...c.cats.values()].join('+') || '(no section)'}/$${money(c.price)}`).join(', ')
     + ' — a shared name is resolved by section, never by the price on the page; add the id by hand (data-sq-item="…" / "identifier")');
 }
 
@@ -470,6 +491,7 @@ if (MODE_WRITE) {
 }
 
 console.log(`bake-prices: source=${cat.label}`);
+if (cat.fetchedAt) console.log(`bake-prices: catalog fetchedAt=${cat.fetchedAt} (as recorded by the adapter; not verified, not in the snapshot)`);
 console.log(`bake-prices: catalog items=${cat.byId.size} anchored=${seen.size}`);
 console.log(`bake-prices: files ${MODE_WRITE ? 'written' : 'that would change'}: ${changedFiles.length ? changedFiles.join(', ') : '(none)'}`);
 console.log(`bake-prices: snapshot ${snapChanged ? (MODE_WRITE ? 'written' : 'would change') : 'unchanged'}`);

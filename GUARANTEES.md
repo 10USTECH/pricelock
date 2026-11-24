@@ -73,11 +73,36 @@ on the page), on every `.html` file under `--site` (not reached through any symb
   managed item or has been reported (strict: refused) — an unknown name is not a way past;
 - `--snapshot` is not, and does not resolve to, the catalog file or a page (checked at
   start-up, by real path and by device+inode);
+- the catalog, read from a file or a URL, has no duplicate key at any depth (the same holds
+  for a saved or live Square response in `square-to-feed`, and for the snapshot in
+  `check-parity`), so the value this run read for a key is the only one in the file;
+- a name shared by several ids is resolved within a section only when exactly one of them is
+  listed under that section — every section an id is listed under counts, and section names
+  are compared ignoring case and spacing;
+- with `--location <id>`: the catalog is schemaVersion 2 and its `locationId` is exactly
+  `<id>`. Without the flag the catalog's location is recorded and compared with nothing;
 - every other JSON-LD price key (`price`, `lowPrice`, `highPrice`, `minPrice`, `maxPrice`)
   and every price-like text the detector recognizes outside JSON-LD has been reported
   (strict: refused).
 
 ## What it does not guarantee
+
+- **That the catalog is complete, current, or the real one.** A passing run ties the site to
+  the catalog file it was given. It does not show that the file holds every item (a saved
+  Square response is refused only when its last page still carries a `cursor`; pages missing
+  from the middle, or a flat list of objects, cannot be detected offline), that it is recent
+  (`cachedAt` is when the catalog last changed; `fetchedAt` is the adapter's own record of a
+  live fetch, unverified, absent for `--input`, and no maximum age is enforced), or that it
+  came from the POS at all (a feed is not signed).
+- **`--location` is only as good as the pipeline that passes it.** It compares two strings:
+  the one on the command line and the one in the feed. It does not ask the POS which
+  location a feed came from.
+- **One parser reads every surface.** The baker, `check-parity` and the tests share
+  `lib/jsonld.mjs` and `lib/extract.mjs`. A defect there is common to all three: they would
+  agree with each other and be wrong together. The suites pin known cases; no second,
+  independent implementation cross-checks them.
+- **The deployed site.** Every check reads a tree on disk. Nothing here fetches the published
+  pages or compares them with the tree that passed (see "Your own site's deploy" above).
 
 - **The detector outside JSON-LD is lexical.** After decoding character references it sees a
   dollar sign (`$`, `＄`, `﹩`) before a digit (ASCII or full-width) — through whitespace,
