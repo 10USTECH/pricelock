@@ -6,8 +6,8 @@
 //
 // The token comes from the environment only — never a flag, never a file in the repo —
 // and is never printed. With --input, nothing is fetched: the file is one or more saved
-// POST /v2/catalog/search responses (an object, or an array of them), and this run is
-// fully offline. That is how the adapter is tested, and how you can review exactly what
+// POST /v2/catalog/search responses (an object, or an array of them IN ORDER, the last one
+// carrying no cursor — a set that stops early is refused), and this run is fully offline. That is how the adapter is tested, and how you can review exactly what
 // Square returned before any price reaches a page.
 //
 // Network boundary (the only outbound call this repo makes besides --src):
@@ -22,7 +22,8 @@ import fs from 'node:fs';
 import https from 'node:https';
 import process from 'node:process';
 import { flagValue, UsageError, readBodyBounded, responseError, writeFileAtomic } from '../lib/guards.mjs';
-import { squareToFeed } from '../lib/square.mjs';
+import { squareToFeed, withFetchedAt } from '../lib/square.mjs';
+import { parseJsonStrict } from '../lib/jsonld.mjs';
 
 const die   = msg => { console.error('square-to-feed FAIL: ' + msg); process.exit(1); };
 const usage = msg => { console.error('square-to-feed: ' + msg); process.exit(2); };
@@ -63,7 +64,8 @@ function postJson(path, token, body) {
         return;
       }
       readBodyBounded(res).then(text => {
-        try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`response is not valid JSON: ${e.message}`)); }
+        // Strict: a repeated key in a response is refused, not resolved last-wins (H4).
+        try { resolve(parseJsonStrict(text)); } catch (e) { reject(new Error(`response is not valid JSON: ${e.message}`)); }
       }, reject);
     });
     const deadline = setTimeout(() => req.destroy(new Error(`exceeded the ${DEADLINE_MS / 1000} s deadline`)), DEADLINE_MS);
@@ -92,7 +94,7 @@ let pages;
 if (INPUT) {
   let text;
   try { text = fs.readFileSync(INPUT, 'utf8'); } catch (e) { die(`cannot read --input ${INPUT}: ${e.message}`); }
-  try { pages = JSON.parse(text); } catch (e) { die(`--input is not valid JSON: ${e.message}`); }
+  try { pages = parseJsonStrict(text); } catch (e) { die(`--input is not valid JSON: ${e.message}`); }
 } else {
   const token = process.env.SQUARE_ACCESS_TOKEN;
   if (!token) die('SQUARE_ACCESS_TOKEN is not set (env only; never a flag). Or pass --input <saved-response.json> to run offline.');
@@ -101,7 +103,10 @@ if (INPUT) {
 
 let result;
 try { result = squareToFeed(pages, { locationId: LOCATION }); } catch (e) { die(e.message); }
-const { feed, skipped } = result;
+// A live fetch is stamped with the time it happened; an offline --input run is not (the
+// file says nothing about when Square was asked, and this tool will not invent it) (H5).
+const feed = INPUT ? result.feed : withFetchedAt(result.feed, new Date());
+const { skipped } = result;
 
 for (const s of skipped) console.error(`square-to-feed SKIP: ${s.id} "${s.name}" — ${s.why}`);
 const priced = feed.menu.reduce((n, sec) => n + sec.items.filter(i => Number.isInteger(i.amountMinor)).length, 0);

@@ -93,7 +93,7 @@ Every check below stops the run before a single file is written (exit 1, named c
 - **The consistency check covers anchored nodes only.** A price node without `data-sq-item` / `"identifier"` is not checked (the baker's default refuses such nodes before they are committed). For every identified JSON-LD offer it checks price **and** currency against the snapshot; an identified item with no readable single offer fails the check. Every snapshot id must have both a visible node and a JSON-LD entry somewhere on the site (`bin/check-parity.mjs` also requires them on the same page, unless `--site-wide`; the demo's own `test/parity.test.js` is site-wide and the demo is one page); the check does not verify that the name next to an id matches the catalog name — ids, not names, are the key.
 - **Formats.** Dollar sign and exactly two decimals; one currency, `USD` — written into each managed offer's `priceCurrency`. A visible price with a thousands separator (`$1,000.00`) is read, and written back with one; JSON-LD prices are written without separators (`"1000.00"`).
 - **Fetching.** `--src` accepts an `https:` URL only, with no `user:password@` part, and fetches it with no authentication, a 15-second idle timeout, a 30-second overall deadline, and an 8 MiB response ceiling. The host must resolve only to public addresses — loopback, RFC 1918, carrier-NAT, link-local, multicast, reserved, documentation and benchmarking ranges are refused, IPv6 forms that embed an IPv4 address are judged by that address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::`, 6to4 `2002::`), and any other IPv6 address must be global unicast (`2000::/3`) outside Teredo, benchmarking, ORCHID and documentation ranges — so SIIT `::ffff:0:…`, NAT64 local-use `64:ff9b:1::`, site-local `fec0::` and the like are refused — checked before the fetch and again when the connection opens. Redirects are refused: point `--src` at the final URL. A real POS API that needs a token is out of scope for this repo.
-- **Snapshot provenance.** The snapshot (v2) records the source path (for a URL, origin and path only: no query string, fragment or credentials), the feed's `cachedAt`, `locationId` and `currency`, and integer `amountMinor` per id — not who ran the baker or when.
+- **Snapshot provenance.** The snapshot (v2) records the source path (for a URL, origin and path only: no query string, fragment or credentials), the feed's `cachedAt`, `locationId` and `currency`, and integer `amountMinor` per id — not who ran the baker or when, and not the feed's `fetchedAt` (it would change the snapshot on every re-fetch of an unchanged catalog).
 - **Freshness.** Nothing runs on a schedule. Prices are as current as the last `--write` that was committed.
 
 ## Writes and recovery
@@ -119,7 +119,7 @@ What that does **not** give you:
 
 | Path | What it is |
 |---|---|
-| `bin/bake-prices.mjs` | The baker. `--check` (no write) / `--write` (rewrite in place); `--allow-unread` to tolerate price-like markup it cannot read. |
+| `bin/bake-prices.mjs` | The baker. `--check` (no write) / `--write` (rewrite in place); `--allow-unread` to tolerate price-like markup it cannot read; `--location <id>` to refuse a catalog for any other location. |
 | `bin/check-parity.mjs` | The offline consistency check for **your** site and snapshot: `--site <dir> --snapshot <file>` (both required), per-page by default, `--site-wide` to relax. Read-only. |
 | `lib/parity.mjs` | The check behind it, as a function (`checkParity`). |
 | `bin/square-to-feed.mjs` | The Square adapter: one location's catalog → v2 feed. Token from env; `--input` for offline runs. |
@@ -138,6 +138,7 @@ What that does **not** give you:
 | `test/adversarial.test.js` | Regression tests from the 2026-10-30 adversarial audit (`docs/AUDIT-2026-10-30.md`): each reproduced a wrong or unchecked price that passed both gates, a write outside `--site`, or a refusal of valid markup. |
 | `test/audit-2026-11-14.test.js` | Regression tests from the 2026-11-14 correctness audit (`docs/AUDIT-2026-11-14.md`): identity taken from the page price, IRI/prefixed/aliased price keys, mixed-case duplicate anchors, `@id` merging, and markup inside comments or `<template>`. |
 | `test/audit-2026-11-16.test.js` | Regression tests from the 2026-11-16 audit (`docs/AUDIT-2026-11-16.md`): a snapshot path that lands on an input, Square's location-availability default, types from another vocabulary, and priced rows the catalog does not know. |
+| `test/audit-2026-11-24.test.js` | Regression tests from the 2026-11-24 audit (`docs/AUDIT-2026-11-24.md`): an id listed under two sections, a catalog for the wrong location, a saved Square response that stops early, duplicate keys in the catalog / Square response / snapshot, and fetch time recorded apart from `cachedAt`. |
 | `test/check-parity.test.js` | The parity runner: no default paths, a green demo beside a failing consumer site, stale prices and currency, ids missing on either side, page-level pairing and `--site-wide`, unreadable inputs. |
 | `test/square.test.js` | The Square adapter on a recorded-shape fixture: twins, location overrides, variations, variable pricing, skips, refusals, and an end-to-end bake. |
 | `docs/AUDIT-2026-10.md` | The first audit record: what was checked, what was reproduced, what was changed, what remains. |
@@ -188,12 +189,14 @@ Catalog shape v2 (what the Square adapter writes and the demo uses):
 
 ```bash
 SQUARE_ACCESS_TOKEN=… node bin/square-to-feed.mjs --location <LOCATION_ID> --out my-catalog.json
-node bin/bake-prices.mjs --check --src my-catalog.json --site ./public --snapshot ./public/prices.snapshot.json
+node bin/bake-prices.mjs --check --src my-catalog.json --location <LOCATION_ID> --site ./public --snapshot ./public/prices.snapshot.json
 ```
 
-The token is read from the environment only and never printed; the only host contacted is `connect.squareup.com` (`--sandbox`: `connect.squareupsandbox.com`), fixed in the code — that is an allowlist, not a validator. The adapter calls `POST /v2/catalog/search` for `ITEM` and `CATEGORY` objects, paginates, and emits one feed item per fixed-priced **variation** present at that location (the variation is the object that carries the price; two variations of one item get `Item (Variation)` names). A per-location price override wins over the base price. Deleted, archived, unsellable and not-at-this-location objects are skipped and listed on stderr. `cachedAt` is the catalog's latest `updated_at`, so an unchanged catalog re-fetches to a byte-identical feed and `--check` stays green.
+Pass the baker the same `--location`: it then refuses a feed whose `locationId` is a different one, or that states none. Without the flag the feed's `locationId` is recorded in the snapshot and compared with nothing.
 
-To review what Square returned before any price reaches a page, or to run with no network at all, save the raw search response(s) and pass `--input saved.json` — the adapter is tested that way (`test/square.test.js`).
+The token is read from the environment only and never printed; the only host contacted is `connect.squareup.com` (`--sandbox`: `connect.squareupsandbox.com`), fixed in the code — that is an allowlist, not a validator. The adapter calls `POST /v2/catalog/search` for `ITEM` and `CATEGORY` objects, paginates, and emits one feed item per fixed-priced **variation** present at that location (the variation is the object that carries the price; two variations of one item get `Item (Variation)` names). A per-location price override wins over the base price. Deleted, archived, unsellable and not-at-this-location objects are skipped and listed on stderr. `cachedAt` is the catalog's latest `updated_at` — when the catalog last *changed*, not when it was read. A live fetch also records `fetchedAt`, the time of the fetch (since v1.8). The baker prints `fetchedAt` and keeps it out of the snapshot, so an unchanged catalog re-fetches to a feed that differs in that one line only, the snapshot is byte-identical, and `--check` stays green. Nothing enforces a maximum age: `fetchedAt` is written by whoever ran the adapter and is not verified.
+
+To review what Square returned before any price reaches a page, or to run with no network at all, save the raw search response(s) and pass `--input saved.json` — the adapter is tested that way (`test/square.test.js`). Save every page, in order: a file whose last response still carries a `cursor` is refused as incomplete (since v1.8). An `--input` run records no `fetchedAt`.
 
 Not converted (by design): modifier pricing, scheduled pricing rules, tax-inclusive display, item options. Those change what a customer pays, not a variation's list price.
 
